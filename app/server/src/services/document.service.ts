@@ -15,7 +15,7 @@ import { badRequest, conflict, forbidden, notFound } from '../utils/errors.js';
  * Files are stored on disk under a generated name and served back only through
  * this service. The name the user typed is metadata — it never touches a path.
  */
-export const UPLOAD_ROOT = path.resolve(env.serverRoot, 'data', 'uploads');
+export const UPLOAD_ROOT = path.resolve(env.dataDir, 'uploads');
 
 /** 25 MB. Large enough for a scanned measurement book, small enough to be sane. */
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;

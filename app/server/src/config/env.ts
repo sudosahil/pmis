@@ -10,12 +10,22 @@ const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
   DATABASE_FILE: z.string().default('./data/pmis.db'),
+  // Where uploaded files are written. On a host this must point at the mounted
+  // disk, or every upload is lost on the next deploy.
+  DATA_DIR: z.string().default('./data'),
   JWT_ACCESS_SECRET: z.string().min(8).default('dev-access-secret-change-me'),
   JWT_REFRESH_SECRET: z.string().min(8).default('dev-refresh-secret-change-me'),
   ACCESS_TOKEN_TTL: z.string().default('30m'),
   REFRESH_TOKEN_TTL: z.string().default('7d'),
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
   BCRYPT_ROUNDS: z.coerce.number().int().min(4).max(15).default(12),
+
+  // What to install when the database is found empty at boot. 'off' is the
+  // default so a deployment never silently gains accounts nobody asked for.
+  SEED_ON_BOOT: z.enum(['off', 'essential', 'demo']).default('off'),
+  ADMIN_USERNAME: z.string().trim().min(3).max(60).default('admin'),
+  ADMIN_EMAIL: z.string().trim().toLowerCase().email().default('admin@pmis.local'),
+  ADMIN_PASSWORD: z.string().min(10).optional(),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -36,6 +46,9 @@ export const env = {
   databasePath: path.isAbsolute(raw.DATABASE_FILE)
     ? raw.DATABASE_FILE
     : path.resolve(serverRoot, raw.DATABASE_FILE),
+  dataDir: path.isAbsolute(raw.DATA_DIR)
+    ? raw.DATA_DIR
+    : path.resolve(serverRoot, raw.DATA_DIR),
   corsOrigins: raw.CORS_ORIGIN.split(',')
     .map((o) => o.trim())
     .filter(Boolean),

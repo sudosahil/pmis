@@ -1680,6 +1680,21 @@ function seedFunds(ids: Ids, userIds: Ids, projectIds: Ids): void {
 
 // --- Entry point -----------------------------------------------------------
 
+/**
+ * The reference data the system cannot function without — roles, the approval
+ * chains and the master lists — with no demonstration records and no accounts.
+ * Used when deploying an instance that will hold real work.
+ */
+export function seedEssentials(): void {
+  const db = getDb();
+  db.transaction(() => {
+    seedRoles();
+    seedWorkflows();
+    seedMasters();
+  })();
+  console.log('Reference data installed: roles, approval chains and master lists.');
+}
+
 export function seed(): void {
   const db = getDb();
   db.transaction(() => {

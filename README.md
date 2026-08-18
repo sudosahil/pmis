@@ -225,6 +225,77 @@ alone. Motion respects `prefers-reduced-motion`.
 
 ---
 
+## Deploying it
+
+The site and the API are deployed separately, and the reason is worth stating
+plainly: **the API cannot run on a serverless host.** It keeps its database in a
+SQLite file and writes uploaded documents to disk. On Vercel the filesystem is
+read-only apart from `/tmp`, which is wiped on every cold start and is not shared
+between concurrent instances — so the database would silently reset, uploads
+would vanish, and two officers could land on different instances and not see each
+other's work. That last failure is invisible, which makes it worse than a crash.
+
+So: **the site goes on Vercel, the API goes on a host with a mounted disk.**
+
+### 1. The API
+
+`render.yaml` in the repository root is a Render blueprint. In Render choose
+**New → Blueprint**, pick this repository, and it creates the service, mounts a
+10 GB disk at `/var/data`, and generates the JWT secrets. It will prompt for:
+
+| Variable | What to give it |
+| --- | --- |
+| `ADMIN_EMAIL` | The first administrator's email |
+| `ADMIN_PASSWORD` | A strong password, at least 10 characters |
+| `CORS_ORIGIN` | The Vercel URL — fill this in after step 2 |
+
+Any host with a persistent volume works the same way; nothing is Render-specific.
+The requirements are a disk, and these settings:
+
+```
+NODE_ENV=production
+DATABASE_FILE=/var/data/pmis.db     # on the disk, not in the app directory
+DATA_DIR=/var/data                  # likewise, for uploads
+JWT_ACCESS_SECRET=<random>          # the app refuses to start in production
+JWT_REFRESH_SECRET=<random>         # with the development defaults
+CORS_ORIGIN=https://<your-site>
+SEED_ON_BOOT=essential
+```
+
+`SEED_ON_BOOT` runs **once, and only while the database is empty**:
+
+- `essential` — roles, the approval chains and the master lists, plus one
+  administrator from `ADMIN_PASSWORD`, who must change it at first sign-in. This
+  is what an instance holding real work wants.
+- `demo` — the whole demonstration department. Convenient for a walkthrough, but
+  it installs accounts whose password is published in this file. Never leave it
+  on an instance with real work on it.
+- `off` — install nothing.
+
+A restart never touches an existing database.
+
+### 2. The site
+
+`vercel.json` in the repository root builds `app/client` and serves it as a
+single-page app. Import the repository in Vercel and set one environment
+variable:
+
+```
+VITE_API_BASE_URL=https://<your-api-host>
+```
+
+It is read at build time, so changing it needs a redeploy. Then go back and set
+`CORS_ORIGIN` on the API to the Vercel URL — until you do, the browser will
+refuse every call.
+
+### 3. Check it
+
+- `https://<your-api-host>/api/health` returns `{"status":"ok"}`
+- Sign in to the site as the administrator you configured
+- You will be asked to change the password immediately — that is intended
+
+---
+
 ## Source documents
 
 The requirements this was built from are five departmental documents. They are **not kept in

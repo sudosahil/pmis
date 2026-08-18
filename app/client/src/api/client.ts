@@ -27,6 +27,14 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Where the API lives. Empty means same origin, which is what the dev proxy and
+ * a single-host deployment both give. Set VITE_API_BASE_URL at build time when
+ * the API is hosted separately from the site — as it is on Vercel, where the
+ * static site and the Express server cannot share an origin.
+ */
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
+
 const ACCESS_KEY = 'pmis.accessToken';
 const REFRESH_KEY = 'pmis.refreshToken';
 
@@ -60,7 +68,7 @@ async function refreshAccessToken(): Promise<boolean> {
   const refreshToken = tokenStore.refresh;
   if (!refreshToken) return false;
 
-  const response = await fetch('/api/auth/refresh', {
+  const response = await fetch(buildUrl('/auth/refresh'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ refreshToken }),
@@ -85,7 +93,7 @@ interface RequestOptions {
 }
 
 function buildUrl(path: string, query?: RequestOptions['query']): string {
-  const url = `/api${path.startsWith('/') ? path : `/${path}`}`;
+  const url = `${API_BASE}/api${path.startsWith('/') ? path : `/${path}`}`;
   if (!query) return url;
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {

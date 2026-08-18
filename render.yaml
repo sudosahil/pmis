@@ -1,0 +1,68 @@
+# Blueprint for the PMIS API.
+#
+# Render is used here because the API needs a persistent disk: the database is
+# SQLite and uploaded files are written to the filesystem. Any host that offers
+# a mounted volume works the same way — the only requirements are a disk at
+# DATA_DIR and the environment below.
+#
+# To deploy: Render dashboard -> New -> Blueprint -> pick this repository.
+# Render reads this file, creates the service and prompts for the secrets.
+
+services:
+  - type: web
+    name: pmis-api
+    runtime: node
+    plan: starter # the free plan has no persistent disk, so the database would reset
+    region: singapore # nearest region to the department; change if you prefer
+    rootDir: app/server
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+
+    # The database and the uploaded files both live here, so it must survive
+    # a redeploy. This is the whole reason the API is not on Vercel.
+    disk:
+      name: pmis-data
+      mountPath: /var/data
+      sizeGB: 10
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_FILE
+        value: /var/data/pmis.db
+      - key: DATA_DIR
+        value: /var/data
+
+      # Generated once by Render and then held constant. Rotating either of
+      # these signs everyone out, which is the intended effect.
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+
+      - key: ACCESS_TOKEN_TTL
+        value: 30m
+      - key: REFRESH_TOKEN_TTL
+        value: 7d
+      - key: BCRYPT_ROUNDS
+        value: 12
+
+      # The Vercel site's origin. Set this after the site is deployed —
+      # the API refuses cross-origin calls from anywhere else.
+      - key: CORS_ORIGIN
+        sync: false
+
+      # First boot only, and only while the database is empty:
+      #   essential — roles, approval chains and master lists, plus one
+      #               administrator using ADMIN_PASSWORD. Use this for real work.
+      #   demo      — the full demonstration department. Published password.
+      #   off       — install nothing; you seed it yourself.
+      - key: SEED_ON_BOOT
+        value: essential
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
