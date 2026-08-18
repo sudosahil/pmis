@@ -15,6 +15,9 @@
  * copied into /tmp on cold start. Running the seed here instead would spend
  * several seconds bcrypt-hashing the demonstration accounts before the first
  * page could answer.
+ *
+ * The .mjs extension is deliberate: the Vercel runtime compiles a bare .js
+ * function as CommonJS, which breaks on the first `import.meta`.
  */
 import fs from 'node:fs';
 import path from 'node:path';
