@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Local database — created by `npm run db:seed`, never shared
+app/server/data/
+
+# Secrets. .env.example is committed; the real file is not.
+.env
+.env.local
+.env.*.local
+
+# Source requirement documents are departmental originals and stay out of
+# version control. See the note in README.md.
+/*.docx
+/*.xlsx
+/*.pptx
+
+# Editor and OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Logs
+*.log
+npm-debug.log*

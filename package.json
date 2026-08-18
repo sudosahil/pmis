@@ -1,0 +1,16 @@
+{
+  "name": "pmis",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PMIS — works, procurement and payments for a Public Works Department",
+  "scripts": {
+    "install:all": "npm install --prefix app/server && npm install --prefix app/client",
+    "dev:server": "npm run dev --prefix app/server",
+    "dev:client": "npm run dev --prefix app/client",
+    "db:seed": "npm run db:seed --prefix app/server",
+    "db:reset": "npm run db:reset --prefix app/server",
+    "test": "npm test --prefix app/server",
+    "typecheck": "npm run typecheck --prefix app/server && npm run typecheck --prefix app/client",
+    "build": "npm run build --prefix app/server && npm run build --prefix app/client"
+  }
+}
