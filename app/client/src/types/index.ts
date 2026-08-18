@@ -137,12 +137,33 @@ export interface InboxItem {
   createdAt: string;
 }
 
+export interface WorkflowStepView {
+  id: number;
+  seq: number;
+  code: string;
+  name: string;
+  roleCode: string;
+  scope: string;
+  slaDays: number;
+  allowReturn: boolean;
+  allowReject: boolean;
+}
+
 export interface WorkflowDefinitionView {
   id: number;
   code: string;
+  version: number;
+  isCurrent: boolean;
   name: string;
   entityType: string;
   description: string | null;
+  status: string;
+  supersededAt: string | null;
+  createdAt: string;
+  inFlightCount: number;
+  totalInstances: number;
+  /** False when a structural edit would supersede the version instead. */
+  editsInPlace: boolean;
   steps: {
     id: number;
     seq: number;
@@ -624,6 +645,155 @@ export type Dashboard = StaffDashboard | ContractorDashboard;
 
 export function isContractorDashboard(d: Dashboard): d is ContractorDashboard {
   return d.role === 'CONTRACTOR';
+}
+
+// --- Files -----------------------------------------------------------------
+
+export interface DocumentFolder {
+  id: number;
+  name: string;
+  parentId: number | null;
+  parentName: string | null;
+  description: string | null;
+  division: { id: number; name: string | null } | null;
+  createdBy: string | null;
+  documentCount: number;
+  childCount: number;
+  createdAt: string;
+}
+
+export type DocumentCategory =
+  | 'GENERAL' | 'SANCTION' | 'AGREEMENT' | 'TENDER' | 'MEASUREMENT'
+  | 'INVOICE' | 'PHOTOGRAPH' | 'DRAWING' | 'CORRESPONDENCE' | 'REPORT';
+
+export interface StoredDocument {
+  id: number;
+  name: string;
+  mimeType: string;
+  extension: string;
+  sizeBytes: number;
+  checksum: string;
+  folder: { id: number; name: string | null } | null;
+  entityType: string | null;
+  entityId: number | null;
+  category: DocumentCategory;
+  description: string | null;
+  division: { id: number; name: string | null } | null;
+  uploadedBy: string | null;
+  uploadedById: number | null;
+  downloadCount: number;
+  createdAt: string;
+}
+
+export interface DocumentStoreSummary {
+  totalFiles: number;
+  totalBytes: number;
+  maxUploadBytes: number;
+  acceptedTypes: string;
+  categories: DocumentCategory[];
+}
+
+// --- Chat ------------------------------------------------------------------
+
+export interface ChatMember {
+  id: number;
+  fullName: string;
+  username: string;
+  roleCode: RoleCode;
+  designation: string | null;
+  divisionName: string | null;
+  isAdmin: boolean;
+  isOnline: boolean;
+  lastSeenAt: string | null;
+}
+
+export interface Conversation {
+  id: number;
+  kind: 'DIRECT' | 'GROUP';
+  name: string;
+  subtitle: string;
+  topic: string | null;
+  createdBy: string | null;
+  createdById: number | null;
+  memberCount: number;
+  unreadCount: number;
+  lastMessage: string | null;
+  lastMessageSender: string | null;
+  lastMessageAt: string | null;
+  isOnline: boolean;
+  members: ChatMember[];
+  createdAt: string;
+}
+
+export interface ChatMessage {
+  id: number;
+  conversationId: number;
+  senderId: number | null;
+  senderName: string | null;
+  senderRole: string | null;
+  body: string;
+  isDeleted: boolean;
+  entityType: string | null;
+  entityId: number | null;
+  document: { id: number; name: string | null } | null;
+  createdAt: string;
+}
+
+export interface ChatContact {
+  id: number;
+  fullName: string;
+  username: string;
+  roleCode: RoleCode;
+  designation: string | null;
+  divisionName: string | null;
+  isOnline: boolean;
+}
+
+// --- Live activity ---------------------------------------------------------
+
+export interface ActivityEntry {
+  id: number;
+  userId: number | null;
+  username: string | null;
+  fullName: string | null;
+  roleCode: string | null;
+  method: string;
+  path: string;
+  action: string | null;
+  statusCode: number;
+  durationMs: number;
+  ipAddress: string | null;
+  userAgent: string | null;
+  createdAt: string;
+}
+
+export interface ActivityPage {
+  items: ActivityEntry[];
+  total: number;
+  page: number;
+  pageSize: number;
+  latestId: number;
+}
+
+export interface OnlineUser {
+  id: number;
+  fullName: string;
+  username: string;
+  roleCode: RoleCode;
+  designation: string | null;
+  divisionName: string | null;
+  lastSeenAt: string | null;
+  requestsToday: number;
+}
+
+export interface ActivityOverview {
+  requestsLastHour: number;
+  errorsLastHour: number;
+  writesLastHour: number;
+  activeUsersLastHour: number;
+  slowestMs: number;
+  onlineNow: number;
+  topUsers: { fullName: string; roleCode: string; requests: number }[];
 }
 
 // --- Notifications and audit ----------------------------------------------

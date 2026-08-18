@@ -17,8 +17,8 @@ interface NavItem {
   icon: React.ReactNode;
   /** Omit to show for every role. */
   roles?: RoleCode[];
-  /** Shows the pending-approval count when true. */
-  badge?: 'approvals';
+  /** Shows a live count beside the label. */
+  badge?: 'approvals' | 'chat';
 }
 
 interface NavGroup {
@@ -37,6 +37,13 @@ const NAV: NavGroup[] = [
       { to: '/dashboard', label: 'Dashboard', icon: <HomeIcon /> },
       { to: '/approvals', label: 'My approvals', icon: <InboxIcon />, roles: ALL_STAFF, badge: 'approvals' },
       { to: '/notifications', label: 'Notifications', icon: <BellIcon /> },
+      { to: '/chat', label: 'Messages', icon: <UsersIcon />, badge: 'chat' },
+    ],
+  },
+  {
+    title: 'Documents',
+    items: [
+      { to: '/files', label: 'Files', icon: <FolderIcon /> },
     ],
   },
   {
@@ -69,6 +76,7 @@ const NAV: NavGroup[] = [
       { to: '/workflows', label: 'Approval chains', icon: <ChartIcon />, roles: ALL_STAFF },
       { to: '/users', label: 'Users', icon: <UsersIcon />, roles: ['ADMIN'] },
       { to: '/audit', label: 'Audit trail', icon: <ShieldIcon />, roles: ['ADMIN', 'AUDITOR', 'CAO', 'MD'] },
+      { to: '/activity', label: 'Live activity', icon: <ChartIcon />, roles: ['ADMIN', 'AUDITOR'] },
     ],
   },
 ];
@@ -108,6 +116,12 @@ export function AppLayout() {
     queryFn: () => api.get<Page<unknown>>('/approvals/inbox', { pageSize: 1 }),
     enabled: !isContractor,
     refetchInterval: 60_000,
+  });
+
+  const chatUnread = useQuery({
+    queryKey: ['chat', 'unread'],
+    queryFn: () => api.get<{ unread: number }>('/chat/unread'),
+    refetchInterval: 20_000,
   });
 
   if (!user) return null;
@@ -250,6 +264,9 @@ export function AppLayout() {
                 <span>{item.label}</span>
                 {item.badge === 'approvals' && (approvals.data?.total ?? 0) > 0 && (
                   <span className="nav-link__count">{approvals.data!.total}</span>
+                )}
+                {item.badge === 'chat' && (chatUnread.data?.unread ?? 0) > 0 && (
+                  <span className="nav-link__count">{chatUnread.data!.unread}</span>
                 )}
               </NavLink>
             ))}

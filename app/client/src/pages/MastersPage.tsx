@@ -117,7 +117,7 @@ export function MastersPage() {
         </Alert>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 240px) 1fr', gap: 18, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 240px) minmax(0, 1fr)', gap: 18, alignItems: 'start' }}>
         <nav aria-label="Master lists" className="card" style={{ padding: 10 }}>
           {grouped.map((entry) => (
             <div key={entry.group} className="nav-section">

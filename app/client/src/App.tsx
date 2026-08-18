@@ -33,6 +33,9 @@ import { MastersPage } from './pages/MastersPage';
 import { WorkflowsPage } from './pages/WorkflowsPage';
 import { UsersPage } from './pages/UsersPage';
 import { AuditPage } from './pages/AuditPage';
+import { FilesPage } from './pages/FilesPage';
+import { ChatPage } from './pages/ChatPage';
+import { LiveActivityPage } from './pages/LiveActivityPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { SearchPage } from './pages/SearchPage';
 
@@ -184,6 +187,9 @@ export function App() {
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/search" element={<SearchPage />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/files" element={<FilesPage />} />
+        <Route path="/chat" element={<ChatPage />} />
+        <Route path="/chat/:id" element={<ChatPage />} />
 
         <Route path="/projects" element={<ProjectsPage />} />
         <Route path="/projects/:id" element={<ProjectDetailPage />} />
@@ -223,6 +229,10 @@ export function App() {
 
         <Route element={<RequireRole roles={['ADMIN', 'AUDITOR', 'CAO', 'MD']} />}>
           <Route path="/audit" element={<AuditPage />} />
+        </Route>
+
+        <Route element={<RequireRole roles={['ADMIN', 'AUDITOR']} />}>
+          <Route path="/activity" element={<LiveActivityPage />} />
         </Route>
 
         <Route path="*" element={<NotFoundPage />} />

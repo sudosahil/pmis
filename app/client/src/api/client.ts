@@ -147,6 +147,104 @@ async function send<T>(path: string, options: RequestOptions, isRetry = false): 
   return payload.data;
 }
 
+/**
+ * Multipart upload. Kept apart from `send` because the body must stay a
+ * FormData — setting Content-Type by hand would strip the boundary — and the
+ * caller wants progress, which fetch does not report.
+ */
+async function uploadFile<T>(
+  path: string,
+  file: File,
+  fields: Record<string, string | number | undefined>,
+  onProgress?: (percent: number) => void,
+  isRetry = false,
+): Promise<T> {
+  const form = new FormData();
+  form.append('file', file);
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined || value === '') continue;
+    form.append(key, String(value));
+  }
+
+  const result = await new Promise<{ status: number; text: string }>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', buildUrl(path));
+    const token = tokenStore.access;
+    if (token) request.setRequestHeader('Authorization', `Bearer ${token}`);
+
+    if (onProgress) {
+      request.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100));
+      });
+    }
+    request.addEventListener('load', () =>
+      resolve({ status: request.status, text: request.responseText }),
+    );
+    request.addEventListener('error', () => reject(new Error('network')));
+    request.addEventListener('abort', () => reject(new Error('aborted')));
+    request.send(form);
+  }).catch(() => {
+    throw new ApiError(0, { message: 'The upload could not reach the server.', code: 'NETWORK' });
+  });
+
+  if (result.status === 401 && !isRetry) {
+    refreshPromise ??= refreshAccessToken().finally(() => {
+      refreshPromise = null;
+    });
+    if (await refreshPromise) return uploadFile<T>(path, file, fields, onProgress, true);
+    tokenStore.clear();
+    onSessionExpired();
+    throw new ApiError(401, {
+      message: 'Your session has expired. Please sign in again.',
+      code: 'UNAUTHORIZED',
+    });
+  }
+
+  let payload: { data: T; error: ApiErrorBody | null };
+  try {
+    payload = JSON.parse(result.text);
+  } catch {
+    throw new ApiError(result.status, {
+      message: 'The server returned an unexpected response.',
+      code: 'BAD_RESPONSE',
+    });
+  }
+  if (result.status >= 400 || payload.error) {
+    throw new ApiError(
+      result.status,
+      payload.error ?? { message: 'The upload failed.', code: 'UNKNOWN' },
+    );
+  }
+  return payload.data;
+}
+
+/**
+ * Downloads through fetch rather than a plain link so the bearer token travels
+ * with the request, then hands the blob to the browser to save.
+ */
+async function downloadFile(path: string, fallbackName: string): Promise<void> {
+  const token = tokenStore.access;
+  const response = await fetch(buildUrl(path), {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, {
+      message: 'That file could not be downloaded.',
+      code: 'DOWNLOAD_FAILED',
+    });
+  }
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fallbackName;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 export const api = {
   get: <T>(path: string, query?: RequestOptions['query']) => send<T>(path, { query }),
   post: <T>(path: string, body?: unknown, query?: RequestOptions['query']) =>
@@ -157,6 +255,8 @@ export const api = {
   /** For login and contractor self-registration, which carry no token. */
   anonymousPost: <T>(path: string, body: unknown) =>
     send<T>(path, { method: 'POST', body, anonymous: true }),
+  upload: uploadFile,
+  download: downloadFile,
 };
 
 /** Shape returned by every paginated list endpoint. */

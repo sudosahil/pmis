@@ -280,10 +280,12 @@ CREATE TABLE IF NOT EXISTS users (
   must_change_password INTEGER NOT NULL DEFAULT 0,
   failed_attempts INTEGER NOT NULL DEFAULT 0,
   last_login_at   TEXT,
+  last_seen_at    TEXT,                             -- refreshed by the activity middleware
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role_code);
+CREATE INDEX IF NOT EXISTS idx_users_last_seen ON users(last_seen_at);
 CREATE INDEX IF NOT EXISTS idx_users_division ON users(division_id);
 CREATE INDEX IF NOT EXISTS idx_users_circle ON users(circle_id);
 CREATE INDEX IF NOT EXISTS idx_users_zone ON users(zone_id);
@@ -321,16 +323,26 @@ CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
 -- 5. WORKFLOW ENGINE (shared by projects, tenders, bills, LOC, registrations)
 -- ---------------------------------------------------------------------------
 
+-- A chain is versioned. Editing the steps of a chain that has files in flight
+-- supersedes the row rather than mutating it, so a file always finishes on the
+-- chain that was in force when it was raised.
 CREATE TABLE IF NOT EXISTS workflow_definitions (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  code        TEXT NOT NULL UNIQUE,
-  name        TEXT NOT NULL,
-  entity_type TEXT NOT NULL,                      -- PROJECT | TENDER | RA_BILL | MISC_BILL | ...
-  description TEXT,
-  status      TEXT NOT NULL DEFAULT 'ACTIVE',
-  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  code         TEXT NOT NULL,
+  version      INTEGER NOT NULL DEFAULT 1,
+  is_current   INTEGER NOT NULL DEFAULT 1,        -- exactly one current row per code
+  name         TEXT NOT NULL,
+  entity_type  TEXT NOT NULL,                     -- PROJECT | TENDER | RA_BILL | MISC_BILL | ...
+  description  TEXT,
+  status       TEXT NOT NULL DEFAULT 'ACTIVE',
+  superseded_at TEXT,
+  created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (code, version)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_definitions_current
+  ON workflow_definitions(code) WHERE is_current = 1;
 
 CREATE TABLE IF NOT EXISTS workflow_steps (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -838,6 +850,132 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read);
 CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at);
+
+-- ---------------------------------------------------------------------------
+-- 11a. DOCUMENTS
+-- ---------------------------------------------------------------------------
+
+-- A foldered repository. A folder with no parent is a top-level cabinet.
+CREATE TABLE IF NOT EXISTS document_folders (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT NOT NULL,
+  parent_id   INTEGER REFERENCES document_folders(id) ON DELETE RESTRICT,
+  description TEXT,
+  -- A folder may be pinned to a division, in which case only that division and
+  -- the head-office cadre see it. NULL means departmental-wide.
+  division_id INTEGER REFERENCES divisions(id) ON DELETE SET NULL,
+  created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (parent_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_document_folders_parent ON document_folders(parent_id);
+CREATE INDEX IF NOT EXISTS idx_document_folders_division ON document_folders(division_id);
+CREATE INDEX IF NOT EXISTS idx_document_folders_created_by ON document_folders(created_by);
+
+-- A stored file. `stored_name` is generated; `name` is what the user sees, and
+-- is never used to build a path.
+CREATE TABLE IF NOT EXISTS documents (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  name          TEXT NOT NULL,
+  stored_name   TEXT NOT NULL UNIQUE,
+  mime_type     TEXT NOT NULL,
+  extension     TEXT NOT NULL,
+  size_bytes    INTEGER NOT NULL,
+  checksum      TEXT NOT NULL,                    -- sha256 of the stored bytes
+  folder_id     INTEGER REFERENCES document_folders(id) ON DELETE RESTRICT,
+  -- Attachment target. Both NULL for a file that only lives in the repository.
+  entity_type   TEXT,                             -- PROJECT | TENDER | RA_BILL | ...
+  entity_id     INTEGER,
+  category      TEXT NOT NULL DEFAULT 'GENERAL',  -- GENERAL | AGREEMENT | MEASUREMENT | INVOICE | ...
+  description   TEXT,
+  division_id   INTEGER REFERENCES divisions(id) ON DELETE SET NULL,
+  uploaded_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  download_count INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_documents_folder ON documents(folder_id);
+CREATE INDEX IF NOT EXISTS idx_documents_entity ON documents(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_documents_division ON documents(division_id);
+CREATE INDEX IF NOT EXISTS idx_documents_uploaded_by ON documents(uploaded_by);
+CREATE INDEX IF NOT EXISTS idx_documents_created ON documents(created_at);
+
+-- ---------------------------------------------------------------------------
+-- 11b. MESSAGING
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS conversations (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind        TEXT NOT NULL DEFAULT 'DIRECT',     -- DIRECT | GROUP
+  name        TEXT,                               -- groups only; a direct chat is named by its members
+  topic       TEXT,
+  -- A direct chat carries the two member ids in order, so the pair can be found
+  -- again instead of creating a second conversation for the same two people.
+  direct_key  TEXT UNIQUE,
+  created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  last_message_at TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_conversations_last_message ON conversations(last_message_at);
+CREATE INDEX IF NOT EXISTS idx_conversations_created_by ON conversations(created_by);
+
+CREATE TABLE IF NOT EXISTS conversation_members (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  is_admin        INTEGER NOT NULL DEFAULT 0,     -- may rename the group and manage members
+  last_read_at    TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (conversation_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_members_user ON conversation_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_conversation_members_conversation ON conversation_members(conversation_id);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  sender_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  body            TEXT NOT NULL,
+  -- A message may carry a link to a record, so a file can be discussed in place.
+  entity_type     TEXT,
+  entity_id       INTEGER,
+  document_id     INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+  deleted_at      TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, id);
+CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
+CREATE INDEX IF NOT EXISTS idx_messages_document ON messages(document_id);
+
+-- ---------------------------------------------------------------------------
+-- 11c. ACTIVITY LOG
+-- ---------------------------------------------------------------------------
+
+-- Every API call an authenticated user makes. This is the live technical log,
+-- distinct from audit_log, which records business events in the department's
+-- own language and is retained permanently.
+CREATE TABLE IF NOT EXISTS activity_log (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  username     TEXT,                              -- kept verbatim so the line survives user deletion
+  full_name    TEXT,
+  role_code    TEXT,
+  method       TEXT NOT NULL,
+  path         TEXT NOT NULL,
+  action       TEXT,                              -- readable summary, e.g. "Opened RA bill 5"
+  status_code  INTEGER NOT NULL,
+  duration_ms  INTEGER NOT NULL DEFAULT 0,
+  ip_address   TEXT,
+  user_agent   TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_activity_log_created ON activity_log(id);
+CREATE INDEX IF NOT EXISTS idx_activity_log_user ON activity_log(user_id);
+CREATE INDEX IF NOT EXISTS idx_activity_log_status ON activity_log(status_code);
 
 -- Named counters backing project/package/tender/bill code generation.
 CREATE TABLE IF NOT EXISTS sequences (

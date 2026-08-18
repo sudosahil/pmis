@@ -96,11 +96,21 @@ function seedWorkflow(
   steps: StepSpec[],
 ): void {
   const db = getDb();
-  const definitionId = upsert('workflow_definitions', code, {
-    name,
-    entity_type: entityType,
-    description,
-  });
+  // Chains are versioned, so the lookup must find the version in force rather
+  // than any row that happens to share the code.
+  const current = db
+    .prepare(`SELECT id FROM workflow_definitions WHERE code = ? AND is_current = 1`)
+    .get(code) as { id: number } | undefined;
+  const definitionId =
+    current?.id ??
+    Number(
+      db
+        .prepare(
+          `INSERT INTO workflow_definitions (code, version, is_current, name, entity_type, description)
+           VALUES (?, 1, 1, ?, ?, ?)`,
+        )
+        .run(code, name, entityType, description).lastInsertRowid,
+    );
 
   const existing = db
     .prepare(`SELECT COUNT(*) AS n FROM workflow_steps WHERE definition_id = ?`)
@@ -687,6 +697,105 @@ function seedContractors(ids: Ids): Ids {
 }
 
 // --- 6. Demo operational records -------------------------------------------
+
+/**
+ * A starting filing structure and a couple of live conversations, so the file
+ * manager and the chat open on something real rather than an empty screen.
+ * No bytes are written — the folders are what a division would set up on day
+ * one, and files arrive when someone uploads them.
+ */
+function seedWorkspace(ids: Ids, userIds: Ids): void {
+  const db = getDb();
+  const already = db.prepare(`SELECT COUNT(*) AS n FROM document_folders`).get() as { n: number };
+  if (already.n > 0) return;
+
+  const insertFolder = db.prepare(
+    `INSERT INTO document_folders (name, parent_id, description, division_id, created_by)
+     VALUES (?, ?, ?, ?, ?)`,
+  );
+  const folder = (
+    name: string,
+    parent: number | null,
+    description: string,
+    divisionId: number | null,
+  ) => Number(insertFolder.run(name, parent, description, divisionId, userIds.admin!).lastInsertRowid);
+
+  const circulars = folder('Circulars and orders', null, 'Government orders, departmental circulars and office memoranda.', null);
+  folder('Government orders', circulars, 'Orders issued by the department.', null);
+  folder('Office memoranda', circulars, 'Internal memoranda and standing instructions.', null);
+
+  const standards = folder('Standards and schedules', null, 'Schedule of rates, specifications and standard drawings.', null);
+  folder('Schedule of rates', standards, 'The current and previous schedules of rates.', null);
+  folder('Standard specifications', standards, 'Material and workmanship specifications.', null);
+
+  const templates = folder('Forms and templates', null, 'Blank departmental forms for site and office use.', null);
+  folder('Bill forms', templates, 'RA bill, miscellaneous bill and voucher templates.', null);
+  folder('Tender documents', templates, 'Model tender documents and bid forms.', null);
+
+  const division = folder('North Gandhinagar Division', null, 'Files belonging to the division office.', ids.divNgr ?? null);
+  folder('Measurement books', division, 'Scanned measurement books, by work.', ids.divNgr ?? null);
+  folder('Agreements', division, 'Executed agreements and work orders.', ids.divNgr ?? null);
+  folder('Site photographs', division, 'Progress photographs, by package.', ids.divNgr ?? null);
+
+  // --- Conversations -------------------------------------------------------
+
+  const insertConversation = db.prepare(
+    `INSERT INTO conversations (kind, name, topic, direct_key, created_by, last_message_at)
+     VALUES (?, ?, ?, ?, ?, datetime('now', ?))`,
+  );
+  const insertMember = db.prepare(
+    `INSERT INTO conversation_members (conversation_id, user_id, is_admin) VALUES (?, ?, ?)`,
+  );
+  const insertMessage = db.prepare(
+    `INSERT INTO messages (conversation_id, sender_id, body, created_at)
+     VALUES (?, ?, ?, datetime('now', ?))`,
+  );
+
+  const billsGroup = Number(
+    insertConversation.run(
+      'GROUP',
+      'Divisional bills desk',
+      'Coordination between the division office and the accounts wing on bills in approval.',
+      null,
+      userIds['ee.kumar']!,
+      '-35 minutes',
+    ).lastInsertRowid,
+  );
+  for (const [username, isAdmin] of [
+    ['ee.kumar', 1], ['ae.reddy', 0], ['ac.nair', 0], ['as.gupta', 0], ['aao.menon', 0], ['cao.desai', 0],
+  ] as [string, number][]) {
+    if (userIds[username]) insertMember.run(billsGroup, userIds[username]!, isAdmin);
+  }
+  const groupThread: [string, string, string][] = [
+    ['ee.kumar', 'Bills for the ring road package are with the accounts wing. Please take them up today.', '-3 hours'],
+    ['ac.nair', 'Noted sir. Deductions schedule checked for RA 2, security deposit and labour cess applied.', '-2 hours'],
+    ['as.gupta', 'Scrutiny done on my side. One query on the measurement book reference, raising it on the file.', '-95 minutes'],
+    ['cao.desai', 'Once the query is settled send it up, we can clear it in this week’s batch.', '-35 minutes'],
+  ];
+  for (const [username, body, offset] of groupThread) {
+    if (userIds[username]) insertMessage.run(billsGroup, userIds[username]!, body, offset);
+  }
+
+  const direct = Number(
+    insertConversation.run(
+      'DIRECT',
+      null,
+      null,
+      [userIds['ee.kumar']!, userIds['ae.reddy']!].sort((a, b) => a - b).join(':'),
+      userIds['ee.kumar']!,
+      '-20 minutes',
+    ).lastInsertRowid,
+  );
+  insertMember.run(direct, userIds['ee.kumar']!, 1);
+  insertMember.run(direct, userIds['ae.reddy']!, 1);
+  const directThread: [string, string, string][] = [
+    ['ee.kumar', 'Reddy, have the measurements for chainage 4.200 onwards been recorded?', '-50 minutes'],
+    ['ae.reddy', 'Yes sir, recorded on Tuesday. Uploading the measurement book scan to the division folder now.', '-20 minutes'],
+  ];
+  for (const [username, body, offset] of directThread) {
+    insertMessage.run(direct, userIds[username]!, body, offset);
+  }
+}
 
 function seedDemoRecords(ids: Ids, userIds: Ids, contractorIds: Ids): void {
   const db = getDb();
@@ -1580,6 +1689,7 @@ export function seed(): void {
     const userIds = seedUsers(ids);
     const contractorIds = seedContractors(ids);
     seedDemoRecords(ids, userIds, contractorIds);
+    seedWorkspace(ids, userIds);
     primeSequences();
   })();
 

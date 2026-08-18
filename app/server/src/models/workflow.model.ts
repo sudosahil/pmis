@@ -3,10 +3,14 @@ import { getDb } from '../db/index.js';
 export interface WorkflowDefinitionRow {
   id: number;
   code: string;
+  version: number;
+  is_current: number;
   name: string;
   entity_type: string;
   description: string | null;
   status: string;
+  superseded_at: string | null;
+  created_at: string;
 }
 
 export interface WorkflowStepRow {
@@ -58,22 +62,150 @@ export interface WorkflowActionRow {
   created_at: string;
 }
 
+const DEFINITION_COLUMNS = `id, code, version, is_current, name, entity_type, description,
+                            status, superseded_at, created_at`;
+
+/** Resolves a code to the chain currently in force. */
 export function findDefinitionByCode(code: string): WorkflowDefinitionRow | null {
   return (
     getDb()
       .prepare<[string], WorkflowDefinitionRow>(
-        `SELECT id, code, name, entity_type, description, status FROM workflow_definitions WHERE code = ?`,
+        `SELECT ${DEFINITION_COLUMNS} FROM workflow_definitions
+          WHERE code = ? AND is_current = 1`,
       )
       .get(code) ?? null
   );
 }
 
-export function listDefinitions(): WorkflowDefinitionRow[] {
+export function findDefinitionById(id: number): WorkflowDefinitionRow | null {
+  return (
+    getDb()
+      .prepare<[number], WorkflowDefinitionRow>(
+        `SELECT ${DEFINITION_COLUMNS} FROM workflow_definitions WHERE id = ?`,
+      )
+      .get(id) ?? null
+  );
+}
+
+/** Every version of a code, newest first — the chain's history. */
+export function listDefinitionVersions(code: string): WorkflowDefinitionRow[] {
   return getDb()
     .prepare(
-      `SELECT id, code, name, entity_type, description, status
-       FROM workflow_definitions ORDER BY name`,
+      `SELECT ${DEFINITION_COLUMNS} FROM workflow_definitions
+        WHERE code = ? ORDER BY version DESC`,
     )
+    .all(code) as WorkflowDefinitionRow[];
+}
+
+export function insertDefinition(values: {
+  code: string;
+  version: number;
+  name: string;
+  entity_type: string;
+  description: string | null;
+  status: string;
+  created_by: number | null;
+}): number {
+  const result = getDb()
+    .prepare(
+      `INSERT INTO workflow_definitions
+         (code, version, is_current, name, entity_type, description, status, created_by)
+       VALUES (@code, @version, 1, @name, @entity_type, @description, @status, @created_by)`,
+    )
+    .run(values);
+  return Number(result.lastInsertRowid);
+}
+
+export function updateDefinition(
+  id: number,
+  values: { name?: string; description?: string | null; status?: string },
+): void {
+  const sets: string[] = [];
+  const params: Record<string, unknown> = { id };
+  for (const [key, value] of Object.entries(values)) {
+    if (value === undefined) continue;
+    sets.push(`${key} = @${key}`);
+    params[key] = value;
+  }
+  if (!sets.length) return;
+  getDb().prepare(`UPDATE workflow_definitions SET ${sets.join(', ')} WHERE id = @id`).run(params);
+}
+
+/** Retires a version so a replacement can take the `is_current` slot. */
+export function supersedeDefinition(id: number): void {
+  getDb()
+    .prepare(
+      `UPDATE workflow_definitions
+          SET is_current = 0, superseded_at = datetime('now')
+        WHERE id = ?`,
+    )
+    .run(id);
+}
+
+export function nextDefinitionVersion(code: string): number {
+  const row = getDb()
+    .prepare<[string], { v: number | null }>(
+      `SELECT MAX(version) AS v FROM workflow_definitions WHERE code = ?`,
+    )
+    .get(code);
+  return (row?.v ?? 0) + 1;
+}
+
+/** Files still moving along this exact version. */
+export function countInFlight(definitionId: number): number {
+  const row = getDb()
+    .prepare<[number], { n: number }>(
+      `SELECT COUNT(*) AS n FROM workflow_instances
+        WHERE definition_id = ? AND status = 'IN_PROGRESS'`,
+    )
+    .get(definitionId);
+  return row?.n ?? 0;
+}
+
+export function countInstances(definitionId: number): number {
+  const row = getDb()
+    .prepare<[number], { n: number }>(
+      `SELECT COUNT(*) AS n FROM workflow_instances WHERE definition_id = ?`,
+    )
+    .get(definitionId);
+  return row?.n ?? 0;
+}
+
+export function deleteDefinition(id: number): void {
+  getDb().prepare(`DELETE FROM workflow_definitions WHERE id = ?`).run(id);
+}
+
+export function insertStep(values: {
+  definition_id: number;
+  seq: number;
+  code: string;
+  name: string;
+  role_code: string;
+  scope: string;
+  sla_days: number;
+  allow_return: number;
+  allow_reject: number;
+}): number {
+  const result = getDb()
+    .prepare(
+      `INSERT INTO workflow_steps
+         (definition_id, seq, code, name, role_code, scope, sla_days, allow_return, allow_reject)
+       VALUES
+         (@definition_id, @seq, @code, @name, @role_code, @scope, @sla_days, @allow_return, @allow_reject)`,
+    )
+    .run(values);
+  return Number(result.lastInsertRowid);
+}
+
+export function deleteSteps(definitionId: number): void {
+  getDb().prepare(`DELETE FROM workflow_steps WHERE definition_id = ?`).run(definitionId);
+}
+
+/** The chains in force. Superseded versions are reached through their code. */
+export function listDefinitions(includeSuperseded = false): WorkflowDefinitionRow[] {
+  const clause = includeSuperseded ? '' : 'WHERE is_current = 1';
+  return getDb()
+    .prepare(`SELECT ${DEFINITION_COLUMNS} FROM workflow_definitions ${clause} ORDER BY name, version DESC`)
     .all() as WorkflowDefinitionRow[];
 }
 

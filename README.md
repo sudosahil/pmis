@@ -92,6 +92,23 @@ division, circle, zone or head office. An officer can approve and forward, rejec
 file to an earlier step for correction, or pin it to a named colleague. Every movement is
 recorded with actor, timestamp and remarks, and shown as a timeline on the record itself.
 
+The administrator designs those chains in the interface: add, rename, reorder and remove steps,
+set who acts, in whose jurisdiction, within how many days, and whether they may return or reject.
+Chains are versioned, so an edit never disturbs a file already moving — see below.
+
+**Files.** A foldered departmental filing cabinet, plus attachments on individual records.
+Uploads are checked against an allow-list of types, stored under a generated name, de-duplicated
+by checksum, and served back only as attachments. A folder may be departmental-wide or pinned to
+one division, and that decides who can see what is inside it.
+
+**Messages.** Direct chats and group chats for every user, with unread counts, presence, and
+notifications for anyone not currently online. Contractors can reach departmental staff but not
+each other.
+
+**Live activity.** The administrator and the auditor can watch the system as it is used: who is
+online, what each person is doing, how the system answered and how long it took — in plain
+words ("Certified RA bill 5"), not raw paths.
+
 ---
 
 ## How it is put together
@@ -104,7 +121,7 @@ app/
       controllers/ Thin request handlers; no business logic
       services/    Business logic; no HTTP awareness
       models/      SQL; no business logic
-      middleware/  Auth, zod validation, centralised error handling
+      middleware/  Auth, zod validation, activity logging, centralised error handling
       config/      Environment, constants, the master registry
       db/          schema.sql, seed, reset
       utils/       Money, code generation, error helpers
@@ -139,15 +156,46 @@ described as metadata in `src/config/masters.ts`. One controller, one service an
 routes serve all fourteen; the definitions are also served to the client, which renders the
 list, the form and the validation from the same description. Adding a master is a data change.
 
-### One workflow engine
+### One workflow engine, and how editing a chain stays safe
 
 Workflow definitions and their steps live in the database. Domain services never import the
 engine's internals and the engine never imports a domain service — instead each domain
 registers an outcome handler (`registerOutcomeHandler('RA_BILL', …)`) that the engine calls when
 a chain finishes, which is what keeps the dependency graph acyclic.
 
-A file always follows the chain that was in force when it was raised, so editing a chain never
-re-routes work already in progress.
+A file always follows the chain that was in force when it was raised. That promise is what makes
+the chains editable at all. Definitions are versioned (`code` + `version`, with one `is_current`
+row per code), and a structural edit behaves differently depending on what is in flight:
+
+- **Nothing in flight** — the steps are rewritten in place and the version is left alone.
+- **Files in flight** — the current version is superseded rather than changed. It keeps its steps
+  and its files, a new version becomes current, and everything raised from then on uses it.
+
+Renaming a chain, re-describing it or deactivating it touches no structure and is always allowed.
+A chain that has never carried a file can be deleted; one that has must be deactivated instead,
+so its history stays readable.
+
+### Two logs, deliberately
+
+`audit_log` is the permanent record of business events, written by the services in the
+department's own language: *RA bill certified*, *contractor blacklisted*, *payment recorded*. It
+is what an auditor reads.
+
+`activity_log` is the technical log, written by middleware for every authenticated API call:
+method, path, status, duration, IP. It is what an administrator watches live to see who is on the
+system and what they are doing. Each line carries a readable summary produced by a route table
+(`middleware/describe-request.ts`, unit-tested), so the feed reads as sentences rather than URLs.
+Polling endpoints are excluded so the log does not fill with its own noise, and entries can be
+pruned on a retention window.
+
+### Uploads
+
+Files are buffered in memory, checked against an allow-list keyed on **both** MIME type and file
+extension, hashed, then written under a generated UUID name — the name the user typed is metadata
+and never touches a path. Downloads go out with `Content-Disposition: attachment` and
+`X-Content-Type-Options: nosniff`, and the resolved path is re-checked to be inside the upload
+root before any bytes are read. Deleting a record only unlinks the bytes when no other row points
+at them.
 
 ### Reference numbers
 

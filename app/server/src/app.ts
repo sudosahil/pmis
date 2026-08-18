@@ -15,6 +15,10 @@ import { workflowRouter } from './routes/workflow.routes.js';
 import { auditRouter, dashboardRouter, notificationRouter } from './routes/dashboard.routes.js';
 import { userRouter } from './routes/user.routes.js';
 import { fundRouter } from './routes/fund.routes.js';
+import { documentRouter } from './routes/document.routes.js';
+import { chatRouter } from './routes/chat.routes.js';
+import { activityRouter } from './routes/activity.routes.js';
+import { activityLogger } from './middleware/activity.js';
 
 export function createApp(): express.Express {
   // Opening the database here means a misconfigured path fails at boot.
@@ -36,6 +40,9 @@ export function createApp(): express.Express {
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: true, limit: '2mb' }));
   app.use(requestId);
+  // Registered before the routers so it can time the whole handler, and reads
+  // req.user on the way out, once `authenticate` has attached it.
+  app.use(activityLogger);
 
   app.use(
     rateLimit({
@@ -68,6 +75,9 @@ export function createApp(): express.Express {
   app.use('/api/audit', auditRouter);
   app.use('/api/users', userRouter);
   app.use('/api/funds', fundRouter);
+  app.use('/api/documents', documentRouter);
+  app.use('/api/chat', chatRouter);
+  app.use('/api/activity', activityRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
