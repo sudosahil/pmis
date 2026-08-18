@@ -18,6 +18,7 @@ import { fundRouter } from './routes/fund.routes.js';
 import { documentRouter } from './routes/document.routes.js';
 import { chatRouter } from './routes/chat.routes.js';
 import { activityRouter } from './routes/activity.routes.js';
+import { roleRouter } from './routes/permission.routes.js';
 import { activityLogger } from './middleware/activity.js';
 
 export function createApp(): express.Express {
@@ -78,6 +79,7 @@ export function createApp(): express.Express {
   app.use('/api/documents', documentRouter);
   app.use('/api/chat', chatRouter);
   app.use('/api/activity', activityRouter);
+  app.use('/api/roles', roleRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

@@ -5,8 +5,7 @@ import {
   listUsersQuerySchema,
   updateUserSchema,
 } from '../services/user.service.js';
-import { ROLES } from '../config/constants.js';
-import { authenticate, requireRole, requireStaff } from '../middleware/auth.js';
+import { authenticate, requirePermission, requireStaff } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/error.js';
 import { validate } from '../middleware/validate.js';
 
@@ -20,7 +19,7 @@ userRouter.get(
   asyncHandler(controller.byRole),
 );
 
-userRouter.use(requireRole(ROLES.ADMIN));
+userRouter.use(requirePermission('users.manage'));
 
 userRouter.get('/', validate(listUsersQuerySchema, 'query'), asyncHandler(controller.list));
 userRouter.get('/:id', asyncHandler(controller.getOne));

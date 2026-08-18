@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import * as controller from '../controllers/dashboard.controller.js';
-import { ROLES } from '../config/constants.js';
-import { authenticate, requireRole } from '../middleware/auth.js';
+import { authenticate, requirePermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/error.js';
 import { validate } from '../middleware/validate.js';
 
@@ -25,6 +24,6 @@ notificationRouter.post(
 );
 
 export const auditRouter = Router();
-auditRouter.use(authenticate, requireRole(ROLES.ADMIN, ROLES.AUDITOR, ROLES.CAO, ROLES.MD));
+auditRouter.use(authenticate, requirePermission('audit.view'));
 
 auditRouter.get('/', validate(controller.auditQuerySchema, 'query'), asyncHandler(controller.auditLog));

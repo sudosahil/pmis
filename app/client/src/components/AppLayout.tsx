@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api, type Page } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { initials } from '../lib/format';
-import type { Notification, RoleCode } from '../types';
+import type { Notification } from '../types';
 import {
   BellIcon, BuildingIcon, ChartIcon, FileTextIcon, FolderIcon, GavelIcon, HomeIcon,
   InboxIcon, LayersIcon, LogOutIcon, MenuIcon, ReceiptIcon, SearchIcon, SettingsIcon,
@@ -15,8 +15,11 @@ interface NavItem {
   to: string;
   label: string;
   icon: React.ReactNode;
-  /** Omit to show for every role. */
-  roles?: RoleCode[];
+  /**
+   * The permission that opens this screen. Omit to show it to everyone.
+   * Which roles hold it is configured on the role access screen.
+   */
+  permission?: string;
   /** Shows a live count beside the label. */
   badge?: 'approvals' | 'chat';
 }
@@ -26,63 +29,60 @@ interface NavGroup {
   items: NavItem[];
 }
 
-const ALL_STAFF: RoleCode[] = [
-  'ADMIN', 'MD', 'CE', 'SE', 'EE', 'AEE', 'AE', 'AC', 'AS', 'AAO', 'CAO', 'AUDITOR',
-];
-
 const NAV: NavGroup[] = [
   {
     title: 'Overview',
     items: [
       { to: '/dashboard', label: 'Dashboard', icon: <HomeIcon /> },
-      { to: '/approvals', label: 'My approvals', icon: <InboxIcon />, roles: ALL_STAFF, badge: 'approvals' },
+      { to: '/approvals', label: 'My approvals', icon: <InboxIcon />, permission: 'approvals.act', badge: 'approvals' },
       { to: '/notifications', label: 'Notifications', icon: <BellIcon /> },
-      { to: '/chat', label: 'Messages', icon: <UsersIcon />, badge: 'chat' },
+      { to: '/chat', label: 'Messages', icon: <UsersIcon />, permission: 'chat.use', badge: 'chat' },
     ],
   },
   {
     title: 'Documents',
     items: [
-      { to: '/files', label: 'Files', icon: <FolderIcon /> },
+      { to: '/files', label: 'Files', icon: <FolderIcon />, permission: 'files.view' },
     ],
   },
   {
     title: 'Works',
     items: [
-      { to: '/projects', label: 'Projects', icon: <FolderIcon /> },
-      { to: '/packages', label: 'Packages', icon: <LayersIcon /> },
+      { to: '/projects', label: 'Projects', icon: <FolderIcon />, permission: 'projects.view' },
+      { to: '/packages', label: 'Packages', icon: <LayersIcon />, permission: 'projects.view' },
     ],
   },
   {
     title: 'Procurement',
     items: [
-      { to: '/tenders', label: 'Tenders', icon: <GavelIcon /> },
-      { to: '/my-bids', label: 'My bids', icon: <FileTextIcon />, roles: ['CONTRACTOR'] },
-      { to: '/contractors', label: 'Contractors', icon: <BuildingIcon />, roles: ALL_STAFF },
+      { to: '/tenders', label: 'Tenders', icon: <GavelIcon />, permission: 'tenders.view' },
+      { to: '/my-bids', label: 'My bids', icon: <FileTextIcon />, permission: 'tenders.bid' },
+      { to: '/contractors', label: 'Contractors', icon: <BuildingIcon />, permission: 'contractors.view' },
     ],
   },
   {
     title: 'Bills & payments',
     items: [
-      { to: '/ra-bills', label: 'RA bills', icon: <ReceiptIcon /> },
-      { to: '/misc-bills', label: 'Miscellaneous bills', icon: <FileTextIcon />, roles: ALL_STAFF },
-      { to: '/funds', label: 'Funds & LOC', icon: <WalletIcon />, roles: ALL_STAFF },
+      { to: '/ra-bills', label: 'RA bills', icon: <ReceiptIcon />, permission: 'bills.ra.view' },
+      { to: '/misc-bills', label: 'Miscellaneous bills', icon: <FileTextIcon />, permission: 'bills.misc.view' },
+      { to: '/funds', label: 'Funds & LOC', icon: <WalletIcon />, permission: 'funds.view' },
     ],
   },
   {
     title: 'Administration',
     items: [
-      { to: '/masters', label: 'Master data', icon: <SettingsIcon />, roles: ALL_STAFF },
-      { to: '/workflows', label: 'Approval chains', icon: <ChartIcon />, roles: ALL_STAFF },
-      { to: '/users', label: 'Users', icon: <UsersIcon />, roles: ['ADMIN'] },
-      { to: '/audit', label: 'Audit trail', icon: <ShieldIcon />, roles: ['ADMIN', 'AUDITOR', 'CAO', 'MD'] },
-      { to: '/activity', label: 'Live activity', icon: <ChartIcon />, roles: ['ADMIN', 'AUDITOR'] },
+      { to: '/masters', label: 'Master data', icon: <SettingsIcon />, permission: 'masters.view' },
+      { to: '/workflows', label: 'Approval chains', icon: <ChartIcon />, permission: 'workflows.view' },
+      { to: '/users', label: 'Users', icon: <UsersIcon />, permission: 'users.manage' },
+      { to: '/roles', label: 'Role access', icon: <ShieldIcon />, permission: 'roles.manage' },
+      { to: '/audit', label: 'Audit trail', icon: <FileTextIcon />, permission: 'audit.view' },
+      { to: '/activity', label: 'Live activity', icon: <ChartIcon />, permission: 'activity.view' },
     ],
   },
 ];
 
 export function AppLayout() {
-  const { user, signOut, isContractor } = useAuth();
+  const { user, signOut, isContractor, can } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -128,7 +128,7 @@ export function AppLayout() {
 
   const visibleGroups = NAV.map((group) => ({
     ...group,
-    items: group.items.filter((item) => !item.roles || item.roles.includes(user.roleCode)),
+    items: group.items.filter((item) => !item.permission || can(item.permission)),
   })).filter((group) => group.items.length > 0);
 
   const posting = user.divisionName ?? user.circleName ?? user.zoneName ?? user.contractorName;

@@ -3,6 +3,8 @@ import { GLOBAL_SCOPE_ROLES, type RoleCode } from '../config/constants.js';
 import { findAuthUserById } from '../models/user.model.js';
 import { verifyAccessToken } from '../services/token.service.js';
 import { forbidden, unauthorized } from '../utils/errors.js';
+import * as permissionService from '../services/permission.service.js';
+import { findPermission } from '../config/permissions.js';
 
 /**
  * Verifies the bearer token and re-reads the user from the database, so a
@@ -27,17 +29,34 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
 }
 
 /** Restricts a route to the listed roles. */
-export function requireRole(...roles: RoleCode[]) {
+/** Blocks contractor accounts from internal departmental routes. */
+/**
+ * Gates a route on a permission rather than a hardcoded list of roles, so an
+ * administrator can move access between roles without a code change.
+ *
+ * Passing several permissions means "any of these".
+ */
+export function requirePermission(...permissions: string[]) {
   return (req: Request, _res: Response, next: NextFunction): void => {
     if (!req.user) return next(unauthorized());
-    if (!roles.includes(req.user.roleCode)) {
-      return next(forbidden(`This action is restricted to: ${roles.join(', ')}.`));
+    const held = permissions.some((permission) =>
+      permissionService.userHasPermission(req.user!, permission),
+    );
+    if (!held) {
+      const names = permissions
+        .map((key) => findPermission(key)?.label ?? key)
+        .join(', ');
+      return next(
+        forbidden(
+          `Your role does not have permission to do this (${names}). ` +
+            'An administrator can grant it on the role access screen.',
+        ),
+      );
     }
     next();
   };
 }
 
-/** Blocks contractor accounts from internal departmental routes. */
 export function requireStaff(req: Request, _res: Response, next: NextFunction): void {
   if (!req.user) return next(unauthorized());
   if (req.user.roleCode === 'CONTRACTOR') {

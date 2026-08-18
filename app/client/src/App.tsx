@@ -6,7 +6,6 @@ import { useToast } from './components/Toast';
 import { AppLayout } from './components/AppLayout';
 import { Modal } from './components/Modal';
 import { Alert, Button, EmptyState, Loading, PageHeader, ShieldIcon, TextInput } from './components/ui';
-import type { RoleCode } from './types';
 
 import { LoginPage } from './pages/LoginPage';
 import { RegisterContractorPage } from './pages/RegisterContractorPage';
@@ -38,10 +37,7 @@ import { ChatPage } from './pages/ChatPage';
 import { LiveActivityPage } from './pages/LiveActivityPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { SearchPage } from './pages/SearchPage';
-
-const ALL_STAFF: RoleCode[] = [
-  'ADMIN', 'MD', 'CE', 'SE', 'EE', 'AEE', 'AE', 'AC', 'AS', 'AAO', 'CAO', 'AUDITOR',
-];
+import { RoleAccessPage } from './pages/RoleAccessPage';
 
 /** Sends anyone without a session to the sign-in screen, remembering where they were headed. */
 function RequireAuth() {
@@ -67,11 +63,15 @@ function RequireAuth() {
   );
 }
 
-/** Guards a route to a set of roles and explains the refusal rather than redirecting silently. */
-function RequireRole({ roles }: { roles: RoleCode[] }) {
-  const { user } = useAuth();
+/**
+ * Guards a route on a permission and explains the refusal rather than
+ * redirecting silently. Which roles hold the permission is configured on the
+ * role access screen, so moving access around needs no code change.
+ */
+function RequirePermission({ permission }: { permission: string }) {
+  const { user, can } = useAuth();
   if (!user) return null;
-  if (roles.includes(user.roleCode)) return <Outlet />;
+  if (can(permission)) return <Outlet />;
 
   return (
     <>
@@ -79,7 +79,7 @@ function RequireRole({ roles }: { roles: RoleCode[] }) {
       <EmptyState
         icon={<ShieldIcon size={40} />}
         title="You do not have access to this screen"
-        text={`This part of PMIS is restricted. You are signed in as ${user.roleName}. If you need access, ask your system administrator.`}
+        text={`This part of PMIS is restricted. You are signed in as ${user.roleName}, and that role has not been granted this access. Your system administrator can grant it on the role access screen.`}
         action={<Link to="/dashboard" className="btn btn--primary">Back to dashboard</Link>}
       />
     </>
@@ -187,51 +187,80 @@ export function App() {
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/search" element={<SearchPage />} />
         <Route path="/profile" element={<ProfilePage />} />
-        <Route path="/files" element={<FilesPage />} />
-        <Route path="/chat" element={<ChatPage />} />
-        <Route path="/chat/:id" element={<ChatPage />} />
+        <Route element={<RequirePermission permission="files.view" />}>
+          <Route path="/files" element={<FilesPage />} />
+        </Route>
+        <Route element={<RequirePermission permission="chat.use" />}>
+          <Route path="/chat" element={<ChatPage />} />
+          <Route path="/chat/:id" element={<ChatPage />} />
+        </Route>
 
-        <Route path="/projects" element={<ProjectsPage />} />
-        <Route path="/projects/:id" element={<ProjectDetailPage />} />
-        <Route path="/packages" element={<PackagesPage />} />
-        <Route path="/packages/:id" element={<PackageDetailPage />} />
+        <Route element={<RequirePermission permission="projects.view" />}>
+          <Route path="/projects" element={<ProjectsPage />} />
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+          <Route path="/packages" element={<PackagesPage />} />
+          <Route path="/packages/:id" element={<PackageDetailPage />} />
+        </Route>
 
-        <Route path="/tenders" element={<TendersPage />} />
-        <Route path="/tenders/:id" element={<TenderDetailPage />} />
+        <Route element={<RequirePermission permission="tenders.view" />}>
+          <Route path="/tenders" element={<TendersPage />} />
+          <Route path="/tenders/:id" element={<TenderDetailPage />} />
+        </Route>
 
-        <Route path="/ra-bills" element={<RaBillsPage />} />
-        <Route path="/ra-bills/new" element={<RaBillFormPage />} />
-        <Route path="/ra-bills/:id" element={<RaBillDetailPage />} />
-        <Route path="/ra-bills/:id/edit" element={<RaBillFormPage />} />
+        <Route element={<RequirePermission permission="bills.ra.view" />}>
+          <Route path="/ra-bills" element={<RaBillsPage />} />
+          <Route path="/ra-bills/new" element={<RaBillFormPage />} />
+          <Route path="/ra-bills/:id" element={<RaBillDetailPage />} />
+          <Route path="/ra-bills/:id/edit" element={<RaBillFormPage />} />
+        </Route>
 
-        <Route element={<RequireRole roles={['CONTRACTOR']} />}>
+        <Route element={<RequirePermission permission="tenders.bid" />}>
           <Route path="/my-bids" element={<MyBidsPage />} />
         </Route>
 
-        <Route element={<RequireRole roles={ALL_STAFF} />}>
+        <Route element={<RequirePermission permission="approvals.act" />}>
           <Route path="/approvals" element={<ApprovalsPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission="contractors.view" />}>
           <Route path="/contractors" element={<ContractorsPage />} />
           <Route path="/contractors/:id" element={<ContractorDetailPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission="bills.misc.view" />}>
           <Route path="/misc-bills" element={<MiscBillsPage />} />
           <Route path="/misc-bills/new" element={<MiscBillFormPage />} />
           <Route path="/misc-bills/:id" element={<MiscBillDetailPage />} />
           <Route path="/misc-bills/:id/edit" element={<MiscBillFormPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission="funds.view" />}>
           <Route path="/funds" element={<FundsPage />} />
           <Route path="/funds/loc/:id" element={<LocRequestDetailPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission="masters.view" />}>
           <Route path="/masters" element={<MastersPage />} />
           <Route path="/masters/:key" element={<MastersPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission="workflows.view" />}>
           <Route path="/workflows" element={<WorkflowsPage />} />
         </Route>
 
-        <Route element={<RequireRole roles={['ADMIN']} />}>
+        <Route element={<RequirePermission permission="users.manage" />}>
           <Route path="/users" element={<UsersPage />} />
         </Route>
 
-        <Route element={<RequireRole roles={['ADMIN', 'AUDITOR', 'CAO', 'MD']} />}>
+        <Route element={<RequirePermission permission="roles.manage" />}>
+          <Route path="/roles" element={<RoleAccessPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission="audit.view" />}>
           <Route path="/audit" element={<AuditPage />} />
         </Route>
 
-        <Route element={<RequireRole roles={['ADMIN', 'AUDITOR']} />}>
+        <Route element={<RequirePermission permission="activity.view" />}>
           <Route path="/activity" element={<LiveActivityPage />} />
         </Route>
 

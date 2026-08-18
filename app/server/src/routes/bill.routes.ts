@@ -2,17 +2,11 @@ import { Router } from 'express';
 import * as controller from '../controllers/bill.controller.js';
 import * as raBillService from '../services/ra-bill.service.js';
 import * as miscBillService from '../services/misc-bill.service.js';
-import { ROLES } from '../config/constants.js';
-import { authenticate, requireRole, requireStaff } from '../middleware/auth.js';
+import { authenticate, requirePermission, requireStaff } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/error.js';
 import { validate } from '../middleware/validate.js';
 
-/** A works bill may be raised by the contractor or entered on their behalf. */
-const RA_AUTHOR_ROLES = [ROLES.CONTRACTOR, ROLES.ADMIN, ROLES.EE, ROLES.AEE, ROLES.AE, ROLES.AC] as const;
-/** Miscellaneous bills originate with the Account Clerk. */
-const MISC_AUTHOR_ROLES = [ROLES.ADMIN, ROLES.AC, ROLES.AS, ROLES.EE] as const;
-/** Only the accounts leadership pushes a voucher to Tally or records payment. */
-const TREASURY_ROLES = [ROLES.ADMIN, ROLES.CAO, ROLES.AAO] as const;
+// Who may do what is configured on the role access screen, not fixed here.
 
 export const raBillRouter = Router();
 raBillRouter.use(authenticate);
@@ -21,20 +15,20 @@ raBillRouter.get('/', validate(controller.raListQuerySchema, 'query'), asyncHand
 raBillRouter.get('/:id', asyncHandler(controller.getRa));
 raBillRouter.post(
   '/',
-  requireRole(...RA_AUTHOR_ROLES),
+  requirePermission('bills.ra.raise'),
   validate(raBillService.createRaBillSchema),
   asyncHandler(controller.createRa),
 );
 raBillRouter.patch(
   '/:id',
-  requireRole(...RA_AUTHOR_ROLES),
+  requirePermission('bills.ra.raise'),
   validate(raBillService.updateRaBillSchema),
   asyncHandler(controller.updateRa),
 );
-raBillRouter.delete('/:id', requireRole(...RA_AUTHOR_ROLES), asyncHandler(controller.removeRa));
+raBillRouter.delete('/:id', requirePermission('bills.ra.raise'), asyncHandler(controller.removeRa));
 raBillRouter.post(
   '/:id/submit',
-  requireRole(...RA_AUTHOR_ROLES),
+  requirePermission('bills.ra.raise'),
   validate(controller.remarksSchema),
   asyncHandler(controller.submitRa),
 );
@@ -42,25 +36,25 @@ raBillRouter.post(
 // Executive Engineer certifies the admissible amount and the ETP percentages.
 raBillRouter.post(
   '/:id/certify',
-  requireRole(ROLES.EE, ROLES.ADMIN),
+  requirePermission('bills.ra.certify'),
   validate(raBillService.certifySchema),
   asyncHandler(controller.certifyRa),
 );
 raBillRouter.put(
   '/:id/deductions',
-  requireRole(ROLES.AC, ROLES.AS, ROLES.AAO, ROLES.CAO, ROLES.ADMIN),
+  requirePermission('bills.ra.deductions'),
   validate(raBillService.deductionsSchema),
   asyncHandler(controller.setRaDeductions),
 );
 raBillRouter.post(
   '/:id/send-to-tally',
-  requireRole(...TREASURY_ROLES),
+  requirePermission('bills.treasury'),
   validate(raBillService.tallySchema),
   asyncHandler(controller.sendRaToTally),
 );
 raBillRouter.post(
   '/:id/payment',
-  requireRole(...TREASURY_ROLES),
+  requirePermission('bills.treasury'),
   validate(raBillService.paymentSchema),
   asyncHandler(controller.payRa),
 );
@@ -80,32 +74,32 @@ miscBillRouter.get(
 miscBillRouter.get('/:id', asyncHandler(controller.getMisc));
 miscBillRouter.post(
   '/',
-  requireRole(...MISC_AUTHOR_ROLES),
+  requirePermission('bills.misc.raise'),
   validate(miscBillService.createMiscBillSchema),
   asyncHandler(controller.createMisc),
 );
 miscBillRouter.patch(
   '/:id',
-  requireRole(...MISC_AUTHOR_ROLES),
+  requirePermission('bills.misc.raise'),
   validate(miscBillService.updateMiscBillSchema),
   asyncHandler(controller.updateMisc),
 );
-miscBillRouter.delete('/:id', requireRole(...MISC_AUTHOR_ROLES), asyncHandler(controller.removeMisc));
+miscBillRouter.delete('/:id', requirePermission('bills.misc.raise'), asyncHandler(controller.removeMisc));
 miscBillRouter.post(
   '/:id/submit',
-  requireRole(...MISC_AUTHOR_ROLES),
+  requirePermission('bills.misc.raise'),
   validate(controller.remarksSchema),
   asyncHandler(controller.submitMisc),
 );
 miscBillRouter.post(
   '/:id/send-to-tally',
-  requireRole(...TREASURY_ROLES),
+  requirePermission('bills.treasury'),
   validate(miscBillService.tallySchema),
   asyncHandler(controller.sendMiscToTally),
 );
 miscBillRouter.post(
   '/:id/payment',
-  requireRole(...TREASURY_ROLES),
+  requirePermission('bills.treasury'),
   validate(miscBillService.paymentSchema),
   asyncHandler(controller.payMisc),
 );

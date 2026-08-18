@@ -5,8 +5,7 @@ import {
   locApprovalSchema,
   locRequestSchema,
 } from '../services/fund.service.js';
-import { ROLES } from '../config/constants.js';
-import { authenticate, requireRole, requireStaff } from '../middleware/auth.js';
+import { authenticate, requirePermission, requireStaff } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/error.js';
 import { validate } from '../middleware/validate.js';
 
@@ -20,7 +19,7 @@ fundRouter.get(
 );
 fundRouter.post(
   '/releases',
-  requireRole(ROLES.ADMIN, ROLES.CAO, ROLES.MD, ROLES.CE),
+  requirePermission('funds.release'),
   validate(fundReleaseSchema),
   asyncHandler(controller.createRelease),
 );
@@ -29,19 +28,19 @@ fundRouter.get('/loc', validate(controller.locQuerySchema, 'query'), asyncHandle
 fundRouter.get('/loc/:id', asyncHandler(controller.getLoc));
 fundRouter.post(
   '/loc',
-  requireRole(ROLES.ADMIN, ROLES.EE, ROLES.AC, ROLES.AS),
+  requirePermission('funds.loc.request'),
   validate(locRequestSchema),
   asyncHandler(controller.createLoc),
 );
 fundRouter.post(
   '/loc/:id/submit',
-  requireRole(ROLES.ADMIN, ROLES.EE, ROLES.AC, ROLES.AS),
+  requirePermission('funds.loc.request'),
   validate(controller.remarksSchema),
   asyncHandler(controller.submitLoc),
 );
 fundRouter.patch(
   '/loc/:id/approved-amount',
-  requireRole(ROLES.ADMIN, ROLES.CAO, ROLES.AAO, ROLES.MD),
+  requirePermission('funds.loc.approve'),
   validate(locApprovalSchema),
   asyncHandler(controller.setApprovedAmount),
 );

@@ -70,19 +70,12 @@ const LABELS: Record<string, string> = {
 export function StatusBadge({
   status,
   tone,
-  showDot = true,
 }: {
   status: string | null | undefined;
   tone?: Tone;
-  showDot?: boolean;
 }) {
   if (!status) return <span className="badge badge--neutral">Unknown</span>;
   const resolved = tone ?? TONES[status] ?? 'neutral';
   const label = LABELS[status] ?? humanise(status);
-  return (
-    <span className={`badge badge--${resolved}`}>
-      {showDot && <span className="badge__dot" aria-hidden="true" />}
-      {label}
-    </span>
-  );
+  return <span className={`badge badge--${resolved}`}>{label}</span>;
 }

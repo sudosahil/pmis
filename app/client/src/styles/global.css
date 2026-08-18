@@ -1022,14 +1022,6 @@ a.stat:hover {
 .badge--info { background: var(--info-bg); color: var(--info-fg); border-color: var(--info-line); }
 .badge--neutral { background: var(--neutral-bg); color: var(--neutral-fg); border-color: var(--neutral-line); }
 
-.badge__dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-  flex: none;
-}
-
 /* --------------------------------------------------------------------------
    Workflow timeline
    -------------------------------------------------------------------------- */

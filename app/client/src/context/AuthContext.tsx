@@ -15,6 +15,11 @@ interface AuthContextValue extends AuthState {
   clearPasswordPrompt: () => void;
   /** True when the signed-in user holds any of the given roles. */
   hasRole: (...roles: RoleCode[]) => boolean;
+  /**
+   * True when the user's role has been granted the permission. What the screen
+   * shows; the server decides what it allows.
+   */
+  can: (...permissions: string[]) => boolean;
   isContractor: boolean;
 }
 
@@ -95,6 +100,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       refreshUser,
       clearPasswordPrompt,
       hasRole: (...roles: RoleCode[]) => Boolean(state.user && roles.includes(state.user.roleCode)),
+      can: (...permissions: string[]) =>
+        Boolean(state.user?.permissions?.some((held) => permissions.includes(held))),
       isContractor: state.user?.roleCode === 'CONTRACTOR',
     }),
     [state, signIn, signOut, refreshUser, clearPasswordPrompt],

@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import * as controller from '../controllers/master.controller.js';
-import { MASTER_MAINTAINER_ROLES } from '../config/constants.js';
-import { authenticate, requireRole, requireStaff } from '../middleware/auth.js';
+import { authenticate, requirePermission, requireStaff } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/error.js';
 import { validate } from '../middleware/validate.js';
 
@@ -25,14 +24,14 @@ masterRouter.get(
 masterRouter.get('/:key/:id', asyncHandler(controller.getOne));
 
 // Maintaining them is restricted to the administrative cadre.
-masterRouter.post('/:key', requireRole(...MASTER_MAINTAINER_ROLES), asyncHandler(controller.create));
+masterRouter.post('/:key', requirePermission('masters.manage'), asyncHandler(controller.create));
 masterRouter.patch(
   '/:key/:id',
-  requireRole(...MASTER_MAINTAINER_ROLES),
+  requirePermission('masters.manage'),
   asyncHandler(controller.update),
 );
 masterRouter.delete(
   '/:key/:id',
-  requireRole(...MASTER_MAINTAINER_ROLES),
+  requirePermission('masters.manage'),
   asyncHandler(controller.remove),
 );

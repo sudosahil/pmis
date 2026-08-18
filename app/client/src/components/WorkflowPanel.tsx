@@ -139,7 +139,7 @@ export function WorkflowPanel({
               <div style={{ minWidth: 0 }}>
                 <div className="history__head">
                   <span className="history__actor">{entry.actorName ?? 'System'}</span>
-                  <StatusBadge status={entry.action} showDot={false} />
+                  <StatusBadge status={entry.action} />
                   <span className="history__time">{dateTime(entry.createdAt)}</span>
                 </div>
                 <div className="timeline__meta">

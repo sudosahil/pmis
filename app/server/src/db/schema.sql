@@ -977,6 +977,39 @@ CREATE INDEX IF NOT EXISTS idx_activity_log_created ON activity_log(id);
 CREATE INDEX IF NOT EXISTS idx_activity_log_user ON activity_log(user_id);
 CREATE INDEX IF NOT EXISTS idx_activity_log_status ON activity_log(status_code);
 
+-- ---------------------------------------------------------------------------
+-- 11d. ROLE PERMISSIONS
+-- ---------------------------------------------------------------------------
+
+-- What each role may do. The catalogue of permissions is code — a key only
+-- means something because a route checks for it — so what is stored here is
+-- purely the grant, which an administrator edits on the roles screen.
+--
+-- A role with no rows here has never been configured and falls back to the
+-- built-in defaults, so a new role code is never accidentally all-powerful or
+-- completely powerless.
+CREATE TABLE IF NOT EXISTS role_permissions (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  role_code      TEXT NOT NULL REFERENCES roles(code) ON DELETE CASCADE,
+  permission_key TEXT NOT NULL,
+  granted_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (role_code, permission_key)
+);
+CREATE INDEX IF NOT EXISTS idx_role_permissions_role ON role_permissions(role_code);
+
+-- Records that a role has been configured at all, so an administrator can
+-- revoke every permission from a role and have that stick rather than being
+-- read as "never set up, use the defaults".
+CREATE TABLE IF NOT EXISTS role_permission_state (
+  role_code   TEXT PRIMARY KEY REFERENCES roles(code) ON DELETE CASCADE,
+  configured  INTEGER NOT NULL DEFAULT 1,
+  updated_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Named counters backing project/package/tender/bill code generation.
 CREATE TABLE IF NOT EXISTS sequences (
   key         TEXT PRIMARY KEY,

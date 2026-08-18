@@ -221,7 +221,6 @@ export function LiveActivityPage() {
         }
         actions={
           <span className={`badge badge--${live ? 'ok' : 'neutral'}`}>
-            <span className="badge__dot" aria-hidden="true" />
             {live ? 'Live' : 'Paused'}
           </span>
         }
@@ -295,7 +294,6 @@ export function LiveActivityPage() {
                     <td className="code">{entry.method}</td>
                     <td>
                       <span className={`badge badge--${statusTone(entry.statusCode)}`}>
-                        <span className="badge__dot" aria-hidden="true" />
                         {entry.statusCode}
                       </span>
                     </td>

@@ -7,7 +7,7 @@ import {
 } from '../services/project.service.js';
 import { createPackageSchema, updatePackageSchema } from '../services/package.service.js';
 import { ROLES } from '../config/constants.js';
-import { authenticate, requireRole } from '../middleware/auth.js';
+import { authenticate, requirePermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/error.js';
 import { validate } from '../middleware/validate.js';
 
@@ -26,25 +26,25 @@ projectRouter.get('/:id', asyncHandler(controller.getOne));
 
 projectRouter.post(
   '/',
-  requireRole(...AUTHORING_ROLES),
+  requirePermission('projects.manage'),
   validate(createProjectSchema),
   asyncHandler(controller.create),
 );
 projectRouter.patch(
   '/:id',
-  requireRole(...AUTHORING_ROLES),
+  requirePermission('projects.manage'),
   validate(updateProjectSchema),
   asyncHandler(controller.update),
 );
 projectRouter.post(
   '/:id/submit',
-  requireRole(...AUTHORING_ROLES),
+  requirePermission('projects.manage'),
   validate(controller.remarksSchema),
   asyncHandler(controller.submitForSanction),
 );
 projectRouter.put(
   '/:id/milestones',
-  requireRole(...AUTHORING_ROLES),
+  requirePermission('projects.manage'),
   validate(milestoneSchema),
   asyncHandler(controller.saveMilestones),
 );
@@ -60,13 +60,13 @@ packageRouter.get(
 packageRouter.get('/:id', asyncHandler(controller.getPackage));
 packageRouter.post(
   '/',
-  requireRole(...AUTHORING_ROLES),
+  requirePermission('projects.manage'),
   validate(createPackageSchema),
   asyncHandler(controller.createPackage),
 );
 packageRouter.patch(
   '/:id',
-  requireRole(...AUTHORING_ROLES),
+  requirePermission('projects.manage'),
   validate(updatePackageSchema),
   asyncHandler(controller.updatePackage),
 );

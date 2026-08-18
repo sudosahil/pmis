@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import * as authService from '../services/auth.service.js';
 import * as userModel from '../models/user.model.js';
+import * as permissionService from '../services/permission.service.js';
 import { ok } from '../utils/respond.js';
 import { unauthorized } from '../utils/errors.js';
 
@@ -31,14 +32,25 @@ export const changePasswordSchema = z
     path: ['confirmPassword'],
   });
 
+/** The client needs to know what to show, so the session carries its grants. */
+function withPermissions<T extends { user: userModel.UserSummary }>(result: T) {
+  return {
+    ...result,
+    user: {
+      ...result.user,
+      permissions: permissionService.permissionsFor(result.user.roleCode),
+    },
+  };
+}
+
 export function login(req: Request, res: Response): void {
   const { username, password } = req.body as z.infer<typeof loginSchema>;
-  ok(res, authService.login(username, password, req.ip));
+  ok(res, withPermissions(authService.login(username, password, req.ip)));
 }
 
 export function refresh(req: Request, res: Response): void {
   const { refreshToken } = req.body as z.infer<typeof refreshSchema>;
-  ok(res, authService.refresh(refreshToken));
+  ok(res, withPermissions(authService.refresh(refreshToken)));
 }
 
 export function logout(req: Request, res: Response): void {
@@ -50,7 +62,8 @@ export function logout(req: Request, res: Response): void {
 export function me(req: Request, res: Response): void {
   if (!req.user) throw unauthorized();
   const summary = userModel.findSummaryById(req.user.id);
-  ok(res, summary);
+  // The client hides what the user cannot do; the server still enforces it.
+  ok(res, { ...summary, permissions: permissionService.permissionsFor(req.user.roleCode) });
 }
 
 export function changePassword(req: Request, res: Response): void {

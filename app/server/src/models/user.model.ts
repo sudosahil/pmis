@@ -279,3 +279,22 @@ export function listRoles(): { code: string; name: string; description: string |
     .prepare(`SELECT code, name, description, scope FROM roles ORDER BY hierarchy DESC, name`)
     .all() as { code: string; name: string; description: string | null; scope: string }[];
 }
+
+/** How many active accounts hold a role — shown on the role access screen. */
+export function countByRole(roleCode: string): number {
+  const row = getDb()
+    .prepare<[string], { n: number }>(
+      `SELECT COUNT(*) AS n FROM users WHERE role_code = ? AND status = 'ACTIVE'`,
+    )
+    .get(roleCode);
+  return row?.n ?? 0;
+}
+
+/** The active holders of a role, so they can be told when their access changes. */
+export function listByRoleCode(roleCode: string): { id: number; full_name: string }[] {
+  return getDb()
+    .prepare(
+      `SELECT id, full_name FROM users WHERE role_code = ? AND status = 'ACTIVE'`,
+    )
+    .all(roleCode) as { id: number; full_name: string }[];
+}

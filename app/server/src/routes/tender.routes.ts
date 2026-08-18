@@ -8,7 +8,7 @@ import {
   updateTenderSchema,
 } from '../services/tender.service.js';
 import { ROLES } from '../config/constants.js';
-import { authenticate, requireRole } from '../middleware/auth.js';
+import { authenticate, requirePermission } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/error.js';
 import { paginationQuery, validate } from '../middleware/validate.js';
 
@@ -24,7 +24,7 @@ tenderRouter.use(authenticate);
 tenderRouter.get('/my-bids', validate(paginationQuery, 'query'), asyncHandler(controller.myBids));
 tenderRouter.post(
   '/:id/bids',
-  requireRole(ROLES.CONTRACTOR),
+  requirePermission('tenders.bid'),
   validate(submitBidSchema),
   asyncHandler(controller.submitBid),
 );
@@ -36,35 +36,35 @@ tenderRouter.get('/:id', asyncHandler(controller.getOne));
 // Authoring and lifecycle.
 tenderRouter.post(
   '/',
-  requireRole(...PROCUREMENT_ROLES),
+  requirePermission('tenders.manage'),
   validate(createTenderSchema),
   asyncHandler(controller.create),
 );
 tenderRouter.patch(
   '/:id',
-  requireRole(...PROCUREMENT_ROLES),
+  requirePermission('tenders.manage'),
   validate(updateTenderSchema),
   asyncHandler(controller.update),
 );
 tenderRouter.post(
   '/:id/submit',
-  requireRole(...PROCUREMENT_ROLES),
+  requirePermission('tenders.manage'),
   validate(controller.remarksSchema),
   asyncHandler(controller.submitForApproval),
 );
 tenderRouter.post(
   '/:id/publish',
-  requireRole(...PROCUREMENT_ROLES),
+  requirePermission('tenders.manage'),
   asyncHandler(controller.publish),
 );
 tenderRouter.post(
   '/:id/close-bidding',
-  requireRole(...PROCUREMENT_ROLES),
+  requirePermission('tenders.manage'),
   asyncHandler(controller.closeBidding),
 );
 tenderRouter.post(
   '/:id/cancel',
-  requireRole(...PROCUREMENT_ROLES),
+  requirePermission('tenders.manage'),
   validate(controller.reasonSchema),
   asyncHandler(controller.cancel),
 );
@@ -72,23 +72,23 @@ tenderRouter.post(
 // Evaluation and award.
 tenderRouter.post(
   '/:id/technical-evaluation/start',
-  requireRole(...EVALUATION_ROLES),
+  requirePermission('tenders.evaluate'),
   asyncHandler(controller.startTechnicalEvaluation),
 );
 tenderRouter.post(
   '/:id/technical-evaluation',
-  requireRole(...EVALUATION_ROLES),
+  requirePermission('tenders.evaluate'),
   validate(technicalEvaluationSchema),
   asyncHandler(controller.recordTechnicalEvaluation),
 );
 tenderRouter.post(
   '/:id/open-financial',
-  requireRole(...EVALUATION_ROLES),
+  requirePermission('tenders.evaluate'),
   asyncHandler(controller.openFinancialBids),
 );
 tenderRouter.post(
   '/:id/award',
-  requireRole(ROLES.ADMIN, ROLES.CE, ROLES.SE),
+  requirePermission('tenders.award'),
   validate(awardSchema),
   asyncHandler(controller.award),
 );

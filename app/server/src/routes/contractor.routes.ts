@@ -2,8 +2,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import * as controller from '../controllers/contractor.controller.js';
 import { registrationSchema, updateContractorSchema } from '../services/contractor.service.js';
-import { ROLES } from '../config/constants.js';
-import { authenticate, requireRole, requireStaff } from '../middleware/auth.js';
+import { authenticate, requirePermission, requireStaff } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/error.js';
 import { validate } from '../middleware/validate.js';
 import { env } from '../config/env.js';
@@ -51,7 +50,7 @@ contractorRouter.patch(
 );
 contractorRouter.post(
   '/:id/blacklist',
-  requireRole(ROLES.ADMIN, ROLES.CE, ROLES.SE, ROLES.CAO),
+  requirePermission('contractors.blacklist'),
   validate(controller.blacklistSchema),
   asyncHandler(controller.setBlacklist),
 );

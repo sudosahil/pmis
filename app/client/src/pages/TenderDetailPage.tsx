@@ -355,7 +355,7 @@ export function TenderDetailPage() {
                     <div>
                       <div className="history__head">
                         <span className="history__actor">{b.contractor.name}</span>
-                        <StatusBadge status={b.technicalStatus} showDot={false} />
+                        <StatusBadge status={b.technicalStatus} />
                       </div>
                       <p className="history__remarks">{b.technicalRemarks}</p>
                     </div>

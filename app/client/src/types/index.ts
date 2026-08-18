@@ -25,6 +25,8 @@ export interface User {
   status: string;
   lastLoginAt: string | null;
   createdAt: string;
+  /** What this user's role may do. Present on the session; absent elsewhere. */
+  permissions?: string[];
 }
 
 export interface LoginResponse {
@@ -32,6 +34,34 @@ export interface LoginResponse {
   refreshToken: string;
   user: User;
   mustChangePassword: boolean;
+}
+
+// --- Role access -----------------------------------------------------------
+
+export interface PermissionDefinition {
+  key: string;
+  label: string;
+  description: string;
+  group: string;
+  /** The administrator may not give this one up. */
+  lockedForAdmin: boolean;
+}
+
+export interface RoleAccess {
+  code: RoleCode;
+  name: string;
+  description: string | null;
+  scope: string;
+  userCount: number;
+  permissions: string[];
+  defaultPermissions: string[];
+  isDefault: boolean;
+}
+
+export interface RoleAccessCatalogue {
+  permissions: PermissionDefinition[];
+  groups: string[];
+  roles: RoleAccess[];
 }
 
 // --- Masters ---------------------------------------------------------------
