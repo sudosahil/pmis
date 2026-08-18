@@ -13,6 +13,10 @@ import { DataTable } from '../components/DataTable';
 import { StatusBadge } from '../components/StatusBadge';
 import { Modal } from '../components/Modal';
 import { WorkflowPanel } from '../components/WorkflowPanel';
+import { SanctionsPanel } from '../components/SanctionsPanel';
+import { DprPanel } from '../components/DprPanel';
+import { Attachments } from '../components/Attachments';
+import { NotingSheet } from '../components/NotingSheet';
 import { useToast } from '../components/Toast';
 import { PackageFormModal } from './PackagesPage';
 
@@ -23,7 +27,9 @@ export function ProjectDetailPage() {
   const { hasRole } = useAuth();
   const toast = useToast();
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<'overview' | 'packages' | 'milestones' | 'approval'>('overview');
+  const [tab, setTab] = useState<
+    'overview' | 'sanctions' | 'dpr' | 'packages' | 'milestones' | 'documents' | 'approval'
+  >('overview');
   const [submitting, setSubmitting] = useState(false);
   const [editingMilestones, setEditingMilestones] = useState(false);
   const [creatingPackage, setCreatingPackage] = useState(false);
@@ -113,7 +119,7 @@ export function ProjectDetailPage() {
       </div>
 
       <div className="tabs" role="tablist">
-        {(['overview', 'packages', 'milestones', 'approval'] as const).map((key) => (
+        {(['overview', 'sanctions', 'dpr', 'packages', 'milestones', 'documents', 'approval'] as const).map((key) => (
           <button
             key={key}
             type="button"
@@ -123,13 +129,30 @@ export function ProjectDetailPage() {
             onClick={() => setTab(key)}
           >
             {key === 'overview' ? 'Overview'
+              : key === 'sanctions' ? 'Sanctions'
+              : key === 'dpr' ? 'DPR'
               : key === 'packages' ? 'Packages'
               : key === 'milestones' ? 'Milestones'
+              : key === 'documents' ? 'Documents & notes'
               : 'Approval'}
             {key === 'packages' && packages.data ? <span className="tab__count">({packages.data.total})</span> : null}
           </button>
         ))}
       </div>
+
+      {tab === 'sanctions' && <SanctionsPanel projectId={projectId} />}
+      {tab === 'dpr' && <DprPanel projectId={projectId} />}
+      {tab === 'documents' && (
+        <div className="grid grid--2">
+          <Attachments
+            entityType="PROJECT"
+            entityId={projectId}
+            title="Project documents"
+            defaultCategory="SANCTION"
+          />
+          <NotingSheet entityType="PROJECT" entityId={projectId} />
+        </div>
+      )}
 
       {tab === 'overview' && (
         <div className="stack">

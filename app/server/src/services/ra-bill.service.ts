@@ -8,6 +8,8 @@ import { insertAuditEntry } from '../models/audit.model.js';
 import { scopeFilter } from './project.service.js';
 import { assertVisible as assertPackageVisible } from './package.service.js';
 import { registerOutcomeHandler, startWorkflow } from './workflow.service.js';
+import * as boqService from './boq.service.js';
+import * as boqModel from '../models/boq.model.js';
 import type { AuthUser } from '../types/auth.js';
 import {
   financialYear,
@@ -23,11 +25,17 @@ import { isoDate, percent, quantity, rupees } from '../middleware/validate.js';
 
 export const raBillItemSchema = z.object({
   slNo: z.coerce.number().int().min(1).optional(),
-  description: z.string().trim().min(2, 'Describe the work item.').max(500),
-  uom: z.string().trim().min(1).max(20),
+  /**
+   * The agreement BOQ line being measured. Where the package carries a BOQ this
+   * is required, and the description, unit and rate are taken from the
+   * agreement rather than from the form.
+   */
+  boqItemId: z.coerce.number().int().positive().optional(),
+  description: z.string().trim().min(2, 'Describe the work item.').max(500).optional(),
+  uom: z.string().trim().min(1).max(20).optional(),
   quantityUptoDate: quantity,
   quantityPrevious: quantity.optional(),
-  rate: rupees,
+  rate: rupees.optional(),
 });
 
 export const createRaBillSchema = z.object({
@@ -134,8 +142,20 @@ export function present(row: raBillModel.RaBillDetailRow) {
       etpOnExpenditure: toRupees(projectEtp),
       totalWithEtp: toRupees(expenditure.total + projectEtp),
     },
+    // Where the bill is sitting, so a list can answer it without opening the file.
+    pendingWith: row.pending_step
+      ? {
+          step: row.pending_step,
+          role: row.pending_role,
+          officer: row.pending_user,
+          since: row.pending_since,
+          dueAt: row.pending_due,
+        }
+      : null,
+    noteCount: row.note_count,
     items: items.map((item) => ({
       id: item.id,
+      boqItemId: item.boq_item_id,
       slNo: item.sl_no,
       description: item.description,
       uom: item.uom,
@@ -230,7 +250,21 @@ export function getOne(id: number, user: AuthUser) {
  * cumulative quantity and what was already billed, which is how a running
  * account bill works.
  */
-function priceItems(items: z.infer<typeof raBillItemSchema>[]) {
+/**
+ * Turns measurements into priced bill lines.
+ *
+ * Where the package carries an agreement BOQ, the line must name the BOQ item
+ * it measures, and the description, unit and rate come from the agreement — not
+ * from whoever filled in the form. That is the whole point of having a BOQ: the
+ * rate on a bill is the rate that was agreed, and the quantity cannot exceed
+ * what the agreement provides for.
+ */
+function priceItems(
+  items: z.infer<typeof raBillItemSchema>[],
+  packageId: number,
+  hasBoq: boolean,
+  excludeBillId: number | null = null,
+) {
   let total = 0;
   const priced = items.map((item, index) => {
     const previous = item.quantityPrevious ?? 0;
@@ -240,9 +274,39 @@ function priceItems(items: z.infer<typeof raBillItemSchema>[]) {
         `Item ${index + 1}: the cumulative quantity cannot be less than the quantity already billed.`,
       );
     }
+
+    if (hasBoq) {
+      if (!item.boqItemId) {
+        throw badRequest(
+          `Item ${index + 1}: choose the agreement BOQ item this measurement is against.`,
+        );
+      }
+      const boq = boqService.resolveForBilling(item.boqItemId, packageId, present, excludeBillId);
+      const amount = lineAmount(present, boq.agreed_rate);
+      total += amount;
+      return {
+        boq_item_id: boq.id,
+        sl_no: item.slNo ?? index + 1,
+        description: boq.description,
+        uom: boq.uom,
+        quantity_upto_date: item.quantityUptoDate,
+        quantity_previous: previous,
+        quantity_present: present,
+        rate: boq.agreed_rate,
+        amount,
+      };
+    }
+
+    // No agreement BOQ on this package, so the form supplies everything.
+    if (!item.description || !item.uom || item.rate === undefined) {
+      throw badRequest(
+        `Item ${index + 1}: enter the description, unit and rate.`,
+      );
+    }
     const amount = lineAmount(present, item.rate);
     total += amount;
     return {
+      boq_item_id: null,
       sl_no: item.slNo ?? index + 1,
       description: item.description,
       uom: item.uom,
@@ -275,7 +339,8 @@ export function create(input: z.infer<typeof createRaBillSchema>, user: AuthUser
       throw conflict('Bills can only be raised against an awarded package.');
     }
 
-    const { priced, total } = priceItems(input.items);
+    const hasBoq = boqModel.listByPackage(input.packageId).length > 0;
+    const { priced, total } = priceItems(input.items, input.packageId, hasBoq);
     if (total <= 0) throw badRequest('The bill amount must be greater than zero.');
 
     const previousPaid = raBillModel.getPreviousPaid(input.packageId);
@@ -399,7 +464,9 @@ export function update(id: number, input: z.infer<typeof updateRaBillSchema>, us
     assertEditable(bill);
 
     if (input.items) {
-      const { priced, total } = priceItems(input.items);
+      const hasBoq = boqModel.listByPackage(bill.package_id).length > 0;
+      // The bill being edited must not count against its own BOQ consumption.
+      const { priced, total } = priceItems(input.items, bill.package_id, hasBoq, id);
       if (total <= 0) throw badRequest('The bill amount must be greater than zero.');
 
       const previousPaid = raBillModel.getPreviousPaid(bill.package_id, id);

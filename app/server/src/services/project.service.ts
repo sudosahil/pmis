@@ -201,7 +201,7 @@ export function getOne(id: number, user: AuthUser) {
   };
 }
 
-function assertVisible(row: projectModel.ProjectDetailRow, user: AuthUser): void {
+export function assertVisible(row: projectModel.ProjectDetailRow, user: AuthUser): void {
   const scope = scopeFilter(user);
   if (scope.divisionId && row.division_id !== scope.divisionId) {
     throw forbidden('This project belongs to another division.');

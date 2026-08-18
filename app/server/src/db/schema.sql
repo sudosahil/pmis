@@ -219,6 +219,23 @@ CREATE INDEX IF NOT EXISTS idx_expense_categories_parent ON expense_categories(p
 -- 3. CONTRACTORS (vendor master + self-registration)
 -- ---------------------------------------------------------------------------
 
+-- The departmental Schedule of Rates. Every BOQ item is priced against one of
+-- these, so an agreed rate can always be compared with the sanctioned rate.
+CREATE TABLE IF NOT EXISTS schedule_of_rates (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  code        TEXT NOT NULL UNIQUE,             -- SR item number, e.g. 4.11.2
+  name        TEXT NOT NULL,                    -- the item of work, as printed in the SR
+  chapter     TEXT,                             -- e.g. Earthwork, Concrete, Pipeline
+  uom         TEXT NOT NULL DEFAULT 'Nos',
+  rate        INTEGER NOT NULL DEFAULT 0,       -- paise
+  sr_year     TEXT NOT NULL DEFAULT '2024-25',  -- the SR edition this rate belongs to
+  status      TEXT NOT NULL DEFAULT 'ACTIVE',
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_schedule_of_rates_chapter ON schedule_of_rates(chapter);
+CREATE INDEX IF NOT EXISTS idx_schedule_of_rates_year ON schedule_of_rates(sr_year);
+
 CREATE TABLE IF NOT EXISTS contractors (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
   code                TEXT NOT NULL UNIQUE,
@@ -513,6 +530,31 @@ CREATE INDEX IF NOT EXISTS idx_packages_created_by ON packages(created_by);
 -- 7. PROCUREMENT / TENDERING
 -- ---------------------------------------------------------------------------
 
+-- The agreement bill of quantities. Copied from the winning bid when a tender
+-- is awarded, and thereafter the only thing an RA bill may be measured against.
+CREATE TABLE IF NOT EXISTS package_boq_items (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  package_id    INTEGER NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
+  sl_no         INTEGER NOT NULL,
+  item_code     TEXT,
+  description   TEXT NOT NULL,
+  uom           TEXT NOT NULL DEFAULT 'Nos',
+  quantity      INTEGER NOT NULL DEFAULT 0,     -- x1000
+  agreed_rate   INTEGER NOT NULL DEFAULT 0,     -- paise; what the contract says
+  amount        INTEGER NOT NULL DEFAULT 0,     -- paise; quantity x agreed rate
+  -- The Schedule of Rates line this item is priced against, and the SR rate as
+  -- it stood when the agreement was signed. Kept as a copy so a later revision
+  -- of the SR never rewrites history on a live agreement.
+  sr_item_id    INTEGER REFERENCES schedule_of_rates(id) ON DELETE SET NULL,
+  sr_rate       INTEGER NOT NULL DEFAULT 0,     -- paise
+  remarks       TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (package_id, sl_no)
+);
+CREATE INDEX IF NOT EXISTS idx_package_boq_package ON package_boq_items(package_id);
+CREATE INDEX IF NOT EXISTS idx_package_boq_sr ON package_boq_items(sr_item_id);
+
 CREATE TABLE IF NOT EXISTS tenders (
   id                    INTEGER PRIMARY KEY AUTOINCREMENT,
   tender_no             TEXT NOT NULL UNIQUE,
@@ -689,6 +731,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_ra_bills_package_seq ON ra_bills(package_id
 CREATE TABLE IF NOT EXISTS ra_bill_items (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
   ra_bill_id          INTEGER NOT NULL REFERENCES ra_bills(id) ON DELETE CASCADE,
+  -- The agreement BOQ line being measured. Null only for bills raised before
+  -- the package carried a BOQ.
+  boq_item_id         INTEGER REFERENCES package_boq_items(id) ON DELETE SET NULL,
   sl_no               INTEGER NOT NULL,
   description         TEXT NOT NULL,
   uom                 TEXT NOT NULL DEFAULT 'Nos',
@@ -700,6 +745,7 @@ CREATE TABLE IF NOT EXISTS ra_bill_items (
   created_at          TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE INDEX IF NOT EXISTS idx_ra_bill_items_boq ON ra_bill_items(boq_item_id);
 CREATE INDEX IF NOT EXISTS idx_ra_items_bill ON ra_bill_items(ra_bill_id);
 
 CREATE TABLE IF NOT EXISTS ra_bill_deductions (
@@ -1009,6 +1055,83 @@ CREATE TABLE IF NOT EXISTS role_permission_state (
   created_at  TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ---------------------------------------------------------------------------
+-- 11e. NOTING SHEET, SANCTIONS AND DPRs
+-- ---------------------------------------------------------------------------
+
+-- The noting sheet a government file carries: officers record observations as
+-- the file moves, without having to approve or reject anything. Distinct from
+-- workflow_actions, which only records decisions.
+CREATE TABLE IF NOT EXISTS notes (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  entity_type  TEXT NOT NULL,                    -- PROJECT | PACKAGE | TENDER | RA_BILL | ...
+  entity_id    INTEGER NOT NULL,
+  -- Sequential within the file, the way a paper noting sheet is numbered.
+  note_no      INTEGER NOT NULL,
+  author_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  author_name  TEXT,                             -- kept verbatim; a note outlives an account
+  author_role  TEXT,
+  body         TEXT NOT NULL,
+  -- An internal note is not shown to the contractor on their own record.
+  is_internal  INTEGER NOT NULL DEFAULT 0,
+  document_id  INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (entity_type, entity_id, note_no)
+);
+CREATE INDEX IF NOT EXISTS idx_notes_entity ON notes(entity_type, entity_id, note_no);
+CREATE INDEX IF NOT EXISTS idx_notes_author ON notes(author_id);
+
+-- Administrative Approval & Financial Sanction, Technical Sanction and their
+-- revisions. These are the government orders that authorise a work and its
+-- cost, and they are what an auditor asks for first.
+CREATE TABLE IF NOT EXISTS project_sanctions (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id     INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  -- ADMINISTRATIVE = AA&FS, TECHNICAL = TS, and the revised forms of each.
+  kind           TEXT NOT NULL,
+  reference_no   TEXT NOT NULL,
+  sanction_date  TEXT NOT NULL,
+  amount         INTEGER NOT NULL DEFAULT 0,     -- paise; the amount sanctioned
+  authority      TEXT NOT NULL,                  -- the officer or body that sanctioned it
+  designation    TEXT,
+  remarks        TEXT,
+  -- The signed order itself, filed through the document store.
+  document_id    INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+  recorded_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_project_sanctions_project ON project_sanctions(project_id, kind);
+CREATE INDEX IF NOT EXISTS idx_project_sanctions_document ON project_sanctions(document_id);
+
+-- The Detailed Project Report, which is what an administrative approval is
+-- granted against. Versioned, because a returned DPR comes back revised.
+CREATE TABLE IF NOT EXISTS project_dprs (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id      INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  dpr_no          TEXT NOT NULL,
+  version         INTEGER NOT NULL DEFAULT 1,
+  title           TEXT NOT NULL,
+  prepared_by     TEXT,                          -- the officer or consultancy
+  consultant      TEXT,
+  estimated_cost  INTEGER NOT NULL DEFAULT 0,    -- paise
+  submission_date TEXT,
+  scope           TEXT,                          -- what the work covers
+  justification   TEXT,                          -- why it is needed
+  status          TEXT NOT NULL DEFAULT 'DRAFT', -- DRAFT | SUBMITTED | APPROVED | RETURNED
+  approved_by     TEXT,
+  approval_date   TEXT,
+  remarks         TEXT,
+  document_id     INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+  created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (project_id, dpr_no, version)
+);
+CREATE INDEX IF NOT EXISTS idx_project_dprs_project ON project_dprs(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_dprs_document ON project_dprs(document_id);
 
 -- Named counters backing project/package/tender/bill code generation.
 CREATE TABLE IF NOT EXISTS sequences (

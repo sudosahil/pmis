@@ -5,7 +5,7 @@ import { api, ApiError, type Page } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../components/Toast';
 import { money, rupees, today } from '../lib/format';
-import type { Package, RaBillDetail } from '../types';
+import type { Package, PackageBoq, RaBillDetail } from '../types';
 import {
   Alert, Button, Card, DetailItem, Loading, PageHeader, PlusIcon, Select, TextInput, TrashIcon,
 } from '../components/ui';
@@ -15,6 +15,8 @@ const BILLABLE = ['AWARDED', 'IN_PROGRESS', 'COMPLETED'];
 
 interface ItemDraft {
   key: number;
+  /** The agreement BOQ line being measured, when the package carries a BOQ. */
+  boqItemId: string;
   description: string;
   uom: string;
   quantityUptoDate: string;
@@ -27,12 +29,17 @@ let nextKey = 1;
 function blankItem(): ItemDraft {
   return {
     key: nextKey++,
+    boqItemId: '',
     description: '',
     uom: '',
     quantityUptoDate: '',
     quantityPrevious: '',
     rate: '',
   };
+}
+
+function quantityText(value: number): string {
+  return value.toLocaleString('en-IN', { maximumFractionDigits: 3 });
 }
 
 function num(value: string): number {
@@ -45,8 +52,9 @@ function presentQuantity(item: ItemDraft): number {
   return num(item.quantityUptoDate) - num(item.quantityPrevious);
 }
 
-function lineAmount(item: ItemDraft): number {
-  return Math.round(presentQuantity(item) * num(item.rate) * 100) / 100;
+function lineAmount(item: ItemDraft, agreedRate?: number): number {
+  const rate = agreedRate ?? num(item.rate);
+  return Math.round(presentQuantity(item) * rate * 100) / 100;
 }
 
 export function RaBillFormPage() {
@@ -92,6 +100,7 @@ export function RaBillFormPage() {
     setItems(
       bill.items.map((item) => ({
         key: nextKey++,
+        boqItemId: item.boqItemId ? String(item.boqItemId) : '',
         description: item.description,
         uom: item.uom,
         quantityUptoDate: String(item.quantityUptoDate),
@@ -100,6 +109,23 @@ export function RaBillFormPage() {
       })),
     );
   }, [bill]);
+
+  // The agreement BOQ for whichever package this bill is against. When the
+  // package carries one, items are chosen from it rather than typed.
+  const activePackageId = isEdit ? bill?.package.id ?? null : packageId ? Number(packageId) : null;
+
+  const boq = useQuery({
+    queryKey: ['package-boq', activePackageId],
+    queryFn: () => api.get<PackageBoq>(`/packages/${activePackageId}/boq`),
+    enabled: activePackageId !== null,
+  });
+
+  const boqItems = boq.data?.items ?? [];
+  const hasBoq = boqItems.length > 0;
+  const boqById = useMemo(
+    () => new Map(boqItems.map((item) => [String(item.id), item])),
+    [boqItems],
+  );
 
   const billablePackages = useMemo(
     () => (packagesQuery.data?.items ?? []).filter((p) => BILLABLE.includes(p.status) && p.contractor?.id),
@@ -111,7 +137,8 @@ export function RaBillFormPage() {
     [billablePackages, packageId],
   );
 
-  const total = items.reduce((sum, item) => sum + lineAmount(item), 0);
+  const rateFor = (item: ItemDraft) => boqById.get(item.boqItemId)?.agreedRate;
+  const total = items.reduce((sum, item) => sum + lineAmount(item, rateFor(item)), 0);
 
   // Contract value and what has already been claimed, from whichever source we have.
   const contractValue = isEdit ? bill?.package.awardedValue ?? 0 : selectedPackage?.awardedValue ?? 0;
@@ -137,14 +164,23 @@ export function RaBillFormPage() {
     periodFrom: periodFrom || undefined,
     periodTo: periodTo || undefined,
     measurementBookNo: measurementBookNo || undefined,
-    items: items.map((item, index) => ({
-      slNo: index + 1,
-      description: item.description.trim(),
-      uom: item.uom.trim(),
-      quantityUptoDate: num(item.quantityUptoDate),
-      quantityPrevious: num(item.quantityPrevious),
-      rate: num(item.rate),
-    })),
+    items: items.map((item, index) =>
+      hasBoq
+        ? {
+            slNo: index + 1,
+            boqItemId: Number(item.boqItemId),
+            quantityUptoDate: num(item.quantityUptoDate),
+            quantityPrevious: num(item.quantityPrevious),
+          }
+        : {
+            slNo: index + 1,
+            description: item.description.trim(),
+            uom: item.uom.trim(),
+            quantityUptoDate: num(item.quantityUptoDate),
+            quantityPrevious: num(item.quantityPrevious),
+            rate: num(item.rate),
+          },
+    ),
   });
 
   const mutation = useMutation({
@@ -176,13 +212,24 @@ export function RaBillFormPage() {
     if (items.length === 0) return 'Add at least one work item.';
     for (const [index, item] of items.entries()) {
       const line = index + 1;
-      if (!item.description.trim()) return `Item ${line}: enter a description.`;
-      if (!item.uom.trim()) return `Item ${line}: enter the unit of measurement.`;
+      if (hasBoq) {
+        if (!item.boqItemId) return `Item ${line}: choose the agreement BOQ item being measured.`;
+      } else {
+        if (!item.description.trim()) return `Item ${line}: enter a description.`;
+        if (!item.uom.trim()) return `Item ${line}: enter the unit of measurement.`;
+        if (num(item.rate) <= 0) return `Item ${line}: enter the agreement rate.`;
+      }
       if (num(item.quantityUptoDate) <= 0) return `Item ${line}: enter the quantity measured up to date.`;
       if (presentQuantity(item) < 0) {
         return `Item ${line}: the quantity up to date cannot be less than the quantity already billed.`;
       }
-      if (num(item.rate) <= 0) return `Item ${line}: enter the agreement rate.`;
+      const boqLine = boqById.get(item.boqItemId);
+      if (boqLine && presentQuantity(item) > boqLine.balanceQuantity) {
+        return (
+          `Item ${line}: only ${boqLine.balanceQuantity} ${boqLine.uom} remain against ` +
+          `BOQ item ${boqLine.slNo}. Reduce the quantity.`
+        );
+      }
     }
     if (total <= 0) return 'The bill amount must be greater than zero.';
     return null;
@@ -352,7 +399,7 @@ export function RaBillFormPage() {
               <thead>
                 <tr>
                   <th scope="col" style={{ width: 44 }}>Sl</th>
-                  <th scope="col">Description of work</th>
+                  <th scope="col">{hasBoq ? 'Agreement BOQ item' : 'Description of work'}</th>
                   <th scope="col" style={{ width: 90 }}>Unit</th>
                   <th scope="col" style={{ width: 120 }} className="num">Qty upto date</th>
                   <th scope="col" style={{ width: 120 }} className="num">Qty previous</th>
@@ -367,34 +414,69 @@ export function RaBillFormPage() {
               <tbody>
                 {items.map((item, index) => {
                   const present = presentQuantity(item);
+                  const boqLine = boqById.get(item.boqItemId);
                   return (
                     <tr key={item.key}>
                       <td>{index + 1}</td>
                       <td>
                         <label className="visually-hidden" htmlFor={`desc-${item.key}`}>
-                          Description of item {index + 1}
+                          {hasBoq ? 'Agreement item' : 'Description'} for line {index + 1}
                         </label>
-                        <input
-                          id={`desc-${item.key}`}
-                          className={`input${itemError(index, 'description') ? ' has-error' : ''}`}
-                          value={item.description}
-                          onChange={(event) => updateItem(index, { description: event.target.value })}
-                          placeholder="e.g. Earthwork excavation in ordinary soil"
-                          maxLength={500}
-                        />
+                        {hasBoq ? (
+                          <>
+                            <select
+                              id={`desc-${item.key}`}
+                              className="select"
+                              value={item.boqItemId}
+                              onChange={(event) => updateItem(index, { boqItemId: event.target.value })}
+                            >
+                              <option value="">Choose the item being measured</option>
+                              {boqItems.map((line) => (
+                                <option
+                                  key={line.id}
+                                  value={line.id}
+                                  disabled={line.isFullyBilled && String(line.id) !== item.boqItemId}
+                                >
+                                  {line.slNo}. {line.description.slice(0, 60)}
+                                  {line.isFullyBilled ? ' — fully billed' : ''}
+                                </option>
+                              ))}
+                            </select>
+                            {boqLine && (
+                              <div className="cell-muted">
+                                {boqLine.itemCode ? `SR ${boqLine.itemCode} · ` : ''}
+                                {quantityText(boqLine.balanceQuantity)} {boqLine.uom} remaining of{' '}
+                                {quantityText(boqLine.quantity)}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <input
+                            id={`desc-${item.key}`}
+                            className={`input${itemError(index, 'description') ? ' has-error' : ''}`}
+                            value={item.description}
+                            onChange={(event) => updateItem(index, { description: event.target.value })}
+                            placeholder="e.g. Earthwork excavation in ordinary soil"
+                            maxLength={500}
+                          />
+                        )}
                       </td>
                       <td>
                         <label className="visually-hidden" htmlFor={`uom-${item.key}`}>
                           Unit for item {index + 1}
                         </label>
-                        <input
-                          id={`uom-${item.key}`}
-                          className={`input${itemError(index, 'uom') ? ' has-error' : ''}`}
-                          value={item.uom}
-                          onChange={(event) => updateItem(index, { uom: event.target.value })}
-                          placeholder="cum"
-                          maxLength={20}
-                        />
+                        {hasBoq ? (
+                          <span>{boqLine?.uom ?? '—'}</span>
+                        ) : (
+                          <input
+                            id={`uom-${item.key}`}
+                            className={`input${itemError(index, 'uom') ? ' has-error' : ''}`}
+                            value={item.uom}
+                            onChange={(event) => updateItem(index, { uom: event.target.value })}
+                            placeholder="cum"
+                            maxLength={20}
+                          />
+                        )}
                       </td>
                       <td>
                         <label className="visually-hidden" htmlFor={`upto-${item.key}`}>
@@ -434,18 +516,24 @@ export function RaBillFormPage() {
                         <label className="visually-hidden" htmlFor={`rate-${item.key}`}>
                           Rate for item {index + 1}
                         </label>
-                        <input
-                          id={`rate-${item.key}`}
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          className="input input--number"
-                          value={item.rate}
-                          onChange={(event) => updateItem(index, { rate: event.target.value })}
-                        />
+                        {hasBoq ? (
+                          <span className="num" style={{ display: 'block', textAlign: 'right' }}>
+                            {boqLine ? money(boqLine.agreedRate) : '—'}
+                          </span>
+                        ) : (
+                          <input
+                            id={`rate-${item.key}`}
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            className="input input--number"
+                            value={item.rate}
+                            onChange={(event) => updateItem(index, { rate: event.target.value })}
+                          />
+                        )}
                       </td>
                       <td className="num">
-                        <strong>{money(lineAmount(item))}</strong>
+                        <strong>{money(lineAmount(item, boqLine?.agreedRate))}</strong>
                       </td>
                       <td>
                         <button

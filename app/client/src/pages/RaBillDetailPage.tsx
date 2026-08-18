@@ -13,6 +13,8 @@ import { DataTable } from '../components/DataTable';
 import { StatusBadge } from '../components/StatusBadge';
 import { Modal, ConfirmModal } from '../components/Modal';
 import { WorkflowPanel } from '../components/WorkflowPanel';
+import { NotingSheet } from '../components/NotingSheet';
+import { Attachments } from '../components/Attachments';
 import { useToast } from '../components/Toast';
 
 export function RaBillDetailPage() {
@@ -357,10 +359,21 @@ export function RaBillDetailPage() {
       )}
 
       {tab === 'approval' && (
-        <WorkflowPanel
-          workflow={b.workflow}
-          onActed={() => void queryClient.invalidateQueries({ queryKey: ['ra-bill', billId] })}
-        />
+        <div className="stack">
+          <WorkflowPanel
+            workflow={b.workflow}
+            onActed={() => void queryClient.invalidateQueries({ queryKey: ['ra-bill', billId] })}
+          />
+          <div className="grid grid--2">
+            <NotingSheet entityType="RA_BILL" entityId={b.id} />
+            <Attachments
+              entityType="RA_BILL"
+              entityId={b.id}
+              title="Bill documents"
+              defaultCategory="MEASUREMENT"
+            />
+          </div>
+        </div>
       )}
 
       {/* --- Dialogs --- */}

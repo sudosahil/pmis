@@ -433,10 +433,122 @@ export interface TenderDetail extends Tender {
   workflow: WorkflowView | null;
 }
 
+// --- Agreement BOQ ---------------------------------------------------------
+
+export interface BoqSrLink {
+  id: number | null;
+  code: string | null;
+  name: string | null;
+  rate: number;
+  /** How far the agreed rate sits above or below the Schedule of Rates. */
+  variancePercent: number;
+  varianceAmount: number;
+}
+
+export interface PackageBoqItem {
+  id: number;
+  slNo: number;
+  itemCode: string | null;
+  description: string;
+  uom: string;
+  quantity: number;
+  agreedRate: number;
+  amount: number;
+  sr: BoqSrLink | null;
+  billedQuantity: number;
+  billedAmount: number;
+  balanceQuantity: number;
+  billedPercent: number;
+  isFullyBilled: boolean;
+  remarks: string | null;
+}
+
+export interface PackageBoq {
+  packageId: number;
+  items: PackageBoqItem[];
+  totals: {
+    itemCount: number;
+    boqValue: number;
+    srValue: number;
+    billedValue: number;
+    balanceValue: number;
+    variancePercent: number | null;
+  };
+}
+
+// --- Noting sheet, sanctions and DPR ---------------------------------------
+
+export interface FileNote {
+  id: number;
+  noteNo: number;
+  entityType: string;
+  entityId: number;
+  authorId: number | null;
+  authorName: string | null;
+  authorRole: string | null;
+  body: string;
+  isInternal: boolean;
+  document: { id: number; name: string | null } | null;
+  createdAt: string;
+}
+
+export type SanctionKind =
+  | 'ADMINISTRATIVE' | 'REVISED_ADMINISTRATIVE'
+  | 'TECHNICAL' | 'REVISED_TECHNICAL' | 'EXPENDITURE';
+
+export interface ProjectSanction {
+  id: number;
+  projectId: number;
+  kind: SanctionKind;
+  kindLabel: string;
+  referenceNo: string;
+  sanctionDate: string;
+  amount: number;
+  authority: string;
+  designation: string | null;
+  remarks: string | null;
+  document: { id: number; name: string | null } | null;
+  recordedBy: string | null;
+  createdAt: string;
+}
+
+export interface ProjectSanctions {
+  items: ProjectSanction[];
+  summary: {
+    administrative: ProjectSanction | null;
+    technical: ProjectSanction | null;
+    hasAdministrative: boolean;
+    hasTechnical: boolean;
+  };
+}
+
+export interface ProjectDpr {
+  id: number;
+  projectId: number;
+  dprNo: string;
+  version: number;
+  title: string;
+  preparedBy: string | null;
+  consultant: string | null;
+  estimatedCost: number;
+  submissionDate: string | null;
+  scope: string | null;
+  justification: string | null;
+  status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'RETURNED';
+  approvedBy: string | null;
+  approvalDate: string | null;
+  remarks: string | null;
+  document: { id: number; name: string | null } | null;
+  createdBy: string | null;
+  createdAt: string;
+}
+
 // --- Bills -----------------------------------------------------------------
 
 export interface RaBillItem {
   id: number;
+  /** The agreement BOQ line this measurement is against. */
+  boqItemId: number | null;
   slNo: number;
   description: string;
   uom: string;
@@ -497,6 +609,15 @@ export interface RaBill {
   };
   items: RaBillItem[];
   deductions: RaBillDeduction[];
+  /** Where the file is sitting, so a list can say so without being opened. */
+  pendingWith: {
+    step: string;
+    role: string | null;
+    officer: string | null;
+    since: string | null;
+    dueAt: string | null;
+  } | null;
+  noteCount: number;
   status: string;
   workflowInstanceId: number | null;
   tallyVoucherNo: string | null;

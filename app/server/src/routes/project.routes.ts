@@ -8,6 +8,9 @@ import {
 import { createPackageSchema, updatePackageSchema } from '../services/package.service.js';
 import { ROLES } from '../config/constants.js';
 import { authenticate, requirePermission } from '../middleware/auth.js';
+import * as recordController from '../controllers/record.controller.js';
+import * as recordService from '../services/record.service.js';
+import * as boqService from '../services/boq.service.js';
 import { asyncHandler } from '../middleware/error.js';
 import { validate } from '../middleware/validate.js';
 
@@ -69,4 +72,65 @@ packageRouter.patch(
   requirePermission('projects.manage'),
   validate(updatePackageSchema),
   asyncHandler(controller.updatePackage),
+);
+
+// --- Agreement BOQ ---------------------------------------------------------
+
+packageRouter.get('/:id/boq', asyncHandler(recordController.listBoq));
+packageRouter.put(
+  '/:id/boq',
+  requirePermission('projects.manage'),
+  validate(boqService.replaceBoqSchema),
+  asyncHandler(recordController.replaceBoq),
+);
+packageRouter.delete(
+  '/:id/boq/:itemId',
+  requirePermission('projects.manage'),
+  asyncHandler(recordController.removeBoqItem),
+);
+
+// --- Sanctions and DPRs ----------------------------------------------------
+
+projectRouter.get('/:id/sanctions', asyncHandler(recordController.listSanctions));
+projectRouter.post(
+  '/:id/sanctions',
+  requirePermission('projects.manage'),
+  validate(recordService.sanctionSchema),
+  asyncHandler(recordController.addSanction),
+);
+projectRouter.patch(
+  '/:id/sanctions/:sanctionId',
+  requirePermission('projects.manage'),
+  validate(recordService.sanctionSchema),
+  asyncHandler(recordController.updateSanction),
+);
+projectRouter.delete(
+  '/:id/sanctions/:sanctionId',
+  requirePermission('projects.manage'),
+  asyncHandler(recordController.removeSanction),
+);
+
+projectRouter.get('/:id/dprs', asyncHandler(recordController.listDprs));
+projectRouter.post(
+  '/:id/dprs',
+  requirePermission('projects.manage'),
+  validate(recordService.dprSchema),
+  asyncHandler(recordController.addDpr),
+);
+projectRouter.patch(
+  '/:id/dprs/:dprId',
+  requirePermission('projects.manage'),
+  validate(recordService.dprSchema),
+  asyncHandler(recordController.updateDpr),
+);
+projectRouter.post(
+  '/:id/dprs/:dprId/decision',
+  requirePermission('projects.manage'),
+  validate(recordService.dprDecisionSchema),
+  asyncHandler(recordController.decideDpr),
+);
+projectRouter.delete(
+  '/:id/dprs/:dprId',
+  requirePermission('projects.manage'),
+  asyncHandler(recordController.removeDpr),
 );

@@ -174,6 +174,21 @@ export function RaBillsPage() {
                 </>
               ),
             },
+            {
+              key: 'pending',
+              header: 'Pending with',
+              render: (row) =>
+                row.pendingWith ? (
+                  <>
+                    <div className="cell-primary">
+                      {row.pendingWith.officer ?? row.pendingWith.role ?? 'Unassigned'}
+                    </div>
+                    <div className="cell-muted">{row.pendingWith.step}</div>
+                  </>
+                ) : (
+                  <span className="cell-muted">Not in approval</span>
+                ),
+            },
             { key: 'status', header: 'Status', render: (row) => <StatusBadge status={row.status} /> },
           ]}
           empty={{

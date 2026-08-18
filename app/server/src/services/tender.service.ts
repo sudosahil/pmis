@@ -10,6 +10,7 @@ import { transaction } from '../db/index.js';
 import * as tenderModel from '../models/tender.model.js';
 import * as projectModel from '../models/project.model.js';
 import * as packageModel from '../models/package.model.js';
+import * as boqModel from '../models/boq.model.js';
 import * as contractorModel from '../models/contractor.model.js';
 import * as userModel from '../models/user.model.js';
 import { insertAuditEntry } from '../models/audit.model.js';
@@ -853,6 +854,10 @@ export function award(id: number, input: z.infer<typeof awardSchema>, user: Auth
       tenderModel.updateTender(id, { package_id: packageId });
     }
 
+    // The winning bid's priced BOQ becomes the agreement BOQ, so every RA bill
+    // from here on is measured against the rates that were actually agreed.
+    const boqLines = boqModel.copyFromTender(id, bid.id, packageId);
+
     const account = findContractorAccount(bid.contractor_id);
     if (account) {
       insertManyNotifications([
@@ -873,7 +878,9 @@ export function award(id: number, input: z.infer<typeof awardSchema>, user: Auth
       action: 'TENDER_AWARDED',
       entityType: ENTITY_TYPES.TENDER,
       entityId: id,
-      detail: `${tender.tender_no} awarded to ${bid.contractor_name} (${loaNo}) for ₹${toRupees(awardedValue)}`,
+      detail:
+        `${tender.tender_no} awarded to ${bid.contractor_name} (${loaNo}) for ₹${toRupees(awardedValue)}` +
+        `; ${boqLines} BOQ item(s) carried to the agreement`,
     });
 
     return getOne(id, user);

@@ -11,6 +11,9 @@ import {
 } from '../components/ui';
 import { DataTable, Pagination } from '../components/DataTable';
 import { StatusBadge } from '../components/StatusBadge';
+import { BoqPanel } from '../components/BoqPanel';
+import { Attachments } from '../components/Attachments';
+import { NotingSheet } from '../components/NotingSheet';
 import { Modal } from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { useLookup } from '../hooks/useLookup';
@@ -299,6 +302,18 @@ export function PackageDetailPage() {
             }}
           />
         </Card>
+
+        <BoqPanel packageId={p.id} />
+
+        <div className="grid grid--2">
+          <Attachments
+            entityType="PACKAGE"
+            entityId={p.id}
+            title="Package documents"
+            defaultCategory="AGREEMENT"
+          />
+          <NotingSheet entityType="PACKAGE" entityId={p.id} />
+        </div>
       </div>
 
       {editing && (

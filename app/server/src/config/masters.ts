@@ -355,6 +355,26 @@ export const MASTER_DEFINITIONS: MasterDefinition[] = [
     ],
   },
   {
+    key: 'schedule-of-rates',
+    table: 'schedule_of_rates',
+    label: 'Schedule of Rates',
+    singular: 'Schedule of Rates item',
+    group: 'Finance',
+    description:
+      'The departmental Schedule of Rates. Every agreement item is priced against one of these, so an agreed rate can be compared with the sanctioned rate.',
+    orderBy: 'code',
+    searchColumns: ['code', 'name', 'chapter'],
+    fields: [
+      CODE('The SR item number, e.g. 4.11.2'),
+      { column: 'name', label: 'Item of Work', type: 'text', required: true, inList: true, maxLength: 300 },
+      { column: 'chapter', label: 'Chapter', type: 'text', inList: true, help: 'e.g. Earthwork, Concrete, Pipeline' },
+      { column: 'uom', label: 'Unit', type: 'text', required: true, inList: true, maxLength: 20 },
+      { column: 'rate', label: 'Rate', type: 'money', required: true, inList: true },
+      { column: 'sr_year', label: 'SR Edition', type: 'text', required: true, inList: true, help: 'e.g. 2024-25' },
+      STATUS_FIELD,
+    ],
+  },
+  {
     key: 'deduction-types',
     table: 'deduction_types',
     label: 'Deduction Types',

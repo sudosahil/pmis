@@ -52,6 +52,14 @@ export interface RaBillDetailRow extends RaBillRow {
   circle_id: number;
   zone_id: number;
   created_by_name: string | null;
+  // Where the file is sitting right now — read straight off the list, because
+  // "with whom is this pending" is the first thing anyone asks.
+  pending_step: string | null;
+  pending_role: string | null;
+  pending_user: string | null;
+  pending_since: string | null;
+  pending_due: string | null;
+  note_count: number;
 }
 
 const DETAIL_SELECT = `
@@ -60,13 +68,24 @@ const DETAIL_SELECT = `
          pk.package_code, pk.name AS package_name, pk.awarded_value,
          c.name AS contractor_name, c.code AS contractor_code, c.tds_rate_bps AS contractor_tds_bps,
          d.code AS division_code, d.name AS division_name,
-         u.full_name AS created_by_name
+         u.full_name AS created_by_name,
+         ws.name AS pending_step,
+         wi.assigned_role AS pending_role,
+         au.full_name AS pending_user,
+         wi.updated_at AS pending_since,
+         wi.due_at AS pending_due,
+         (SELECT COUNT(*) FROM notes n
+           WHERE n.entity_type = 'RA_BILL' AND n.entity_id = rb.id) AS note_count
   FROM ra_bills rb
   JOIN projects p ON p.id = rb.project_id
   JOIN packages pk ON pk.id = rb.package_id
   JOIN contractors c ON c.id = rb.contractor_id
   JOIN divisions d ON d.id = rb.division_id
   LEFT JOIN users u ON u.id = rb.created_by
+  LEFT JOIN workflow_instances wi
+         ON wi.id = rb.workflow_instance_id AND wi.status = 'IN_PROGRESS'
+  LEFT JOIN workflow_steps ws ON ws.id = wi.current_step_id
+  LEFT JOIN users au ON au.id = wi.assigned_user_id
 `;
 
 export function findById(id: number): RaBillDetailRow | null {
@@ -160,6 +179,7 @@ export function deleteRaBill(id: number): void {
 export interface RaBillItemRow {
   id: number;
   ra_bill_id: number;
+  boq_item_id: number | null;
   sl_no: number;
   description: string;
   uom: string;
@@ -185,13 +205,14 @@ export function replaceItems(
     db.prepare(`DELETE FROM ra_bill_items WHERE ra_bill_id = ?`).run(billId);
     const stmt = db.prepare(
       `INSERT INTO ra_bill_items
-         (ra_bill_id, sl_no, description, uom, quantity_upto_date, quantity_previous,
-          quantity_present, rate, amount)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (ra_bill_id, boq_item_id, sl_no, description, uom, quantity_upto_date,
+          quantity_previous, quantity_present, rate, amount)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     items.forEach((item, index) => {
       stmt.run(
         billId,
+        item.boq_item_id ?? null,
         item.sl_no || index + 1,
         item.description,
         item.uom,

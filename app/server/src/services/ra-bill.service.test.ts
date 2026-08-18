@@ -3,6 +3,7 @@ import { closeDb, getDb } from '../db/index.js';
 import { seed } from '../db/seed.js';
 import { findAuthUserById } from '../models/user.model.js';
 import * as raBillService from './ra-bill.service.js';
+import * as boqService from './boq.service.js';
 import type { AuthUser } from '../types/auth.js';
 
 /**
@@ -38,49 +39,84 @@ function billablePackageId(): number {
 let ee: AuthUser;
 let accountClerk: AuthUser;
 let packageId: number;
+let boqLines: { id: number; agreedRate: number; uom: string; quantity: number }[];
 
 beforeAll(() => {
   seed();
   ee = userByUsername('ee.kumar');
   accountClerk = userByUsername('ac.nair');
   packageId = billablePackageId();
+  boqLines = boqService.listForPackage(packageId, ee).items.map((item) => ({
+    id: item.id,
+    agreedRate: item.agreedRate,
+    uom: item.uom,
+    quantity: item.quantity,
+  }));
 });
 
 afterAll(() => {
   closeDb();
 });
 
-/** Creates a fresh draft bill for one line of work. */
-function createDraft(quantityUptoDate: string, quantityPrevious: string, rate: string) {
+/**
+ * Creates a draft measuring one line of the agreement BOQ. The rate is not
+ * passed — it comes from the agreement, which is the point of having a BOQ.
+ */
+function createDraft(quantityUptoDate: string, quantityPrevious = '0', boqIndex = 0) {
+  const line = boqLines[boqIndex]!;
   const input = raBillService.createRaBillSchema.parse({
     packageId,
     billType: 'RA',
-    items: [
-      {
-        description: 'Laying 300 mm DI pipeline including jointing and testing',
-        uom: 'rmt',
-        quantityUptoDate,
-        quantityPrevious,
-        rate,
-      },
-    ],
+    items: [{ boqItemId: line.id, quantityUptoDate, quantityPrevious }],
   });
   return raBillService.create(input, ee);
 }
 
+/** The agreed rate of the BOQ line a draft measures, for expected amounts. */
+function agreedRate(boqIndex = 0): number {
+  return boqLines[boqIndex]!.agreedRate;
+}
+
 describe('creating a running account bill', () => {
   it('prices the present quantity, not the cumulative one', () => {
-    const bill = createDraft('1250', '400', '2450');
+    const bill = createDraft('1250', '400');
 
     expect(bill.items).toHaveLength(1);
     expect(bill.items[0]!.quantityPresent).toBe(850);
-    // 850 rmt at ₹2,450 = ₹20,82,500.
-    expect(bill.items[0]!.amount).toBe(2_082_500);
-    expect(bill.amounts.presentBillAmount).toBe(2_082_500);
+    expect(bill.items[0]!.amount).toBe(850 * agreedRate());
+    expect(bill.amounts.presentBillAmount).toBe(850 * agreedRate());
+  });
+
+  it('takes the rate and the description from the agreement, not the form', () => {
+    const bill = createDraft('100');
+    const line = boqLines[0]!;
+
+    expect(bill.items[0]!.boqItemId).toBe(line.id);
+    expect(bill.items[0]!.rate).toBe(line.agreedRate);
+    expect(bill.items[0]!.uom).toBe(line.uom);
+  });
+
+  it('refuses a measurement that is not against an agreement item', () => {
+    expect(() =>
+      raBillService.create(
+        raBillService.createRaBillSchema.parse({
+          packageId,
+          items: [
+            { description: 'Something not in the agreement', uom: 'cum', quantityUptoDate: 10, rate: 100 },
+          ],
+        }),
+        ee,
+      ),
+    ).toThrow(/choose the agreement BOQ item/);
+  });
+
+  it('refuses to measure more than the agreement provides for', () => {
+    const line = boqLines[0]!;
+    expect(() => createDraft(String(line.quantity + 1))).toThrow(/remain against an agreement quantity/);
   });
 
   it('allots a bill number and starts as a draft', () => {
-    const bill = createDraft('100', '0', '1000');
+    const bill = createDraft('100');
 
     expect(bill.billNo).toMatch(/^[A-Z-]+\/RA\/\d{4}-\d{2}\/\d{4}$/);
     expect(bill.status).toBe('DRAFT');
@@ -88,15 +124,15 @@ describe('creating a running account bill', () => {
   });
 
   it('numbers each bill of a package in sequence', () => {
-    const first = createDraft('10', '0', '100');
-    const second = createDraft('20', '10', '100');
+    const first = createDraft('10');
+    const second = createDraft('20', '10');
 
     expect(second.raSequence).toBe(first.raSequence + 1);
     expect(second.billNo).not.toBe(first.billNo);
   });
 
   it('seeds the statutory deduction schedule and nets it off', () => {
-    const bill = createDraft('1000', '0', '1000');
+    const bill = createDraft('1000');
 
     expect(bill.deductions.length).toBeGreaterThan(0);
     const summed = bill.deductions.reduce((total, d) => total + d.amount, 0);
@@ -108,24 +144,24 @@ describe('creating a running account bill', () => {
   });
 
   it('states the net payable in words for the voucher', () => {
-    const bill = createDraft('1000', '0', '1000');
+    const bill = createDraft('1000');
     expect(bill.amounts.netPayableInWords).toMatch(/^Rupees .+ Only$/);
   });
 
   it('refuses a bill whose cumulative quantity is below what was already billed', () => {
-    expect(() => createDraft('100', '400', '2450')).toThrow(
+    expect(() => createDraft('100', '400')).toThrow(
       /cannot be less than the quantity already billed/,
     );
   });
 
   it('refuses a bill worth nothing', () => {
-    expect(() => createDraft('100', '100', '2450')).toThrow(/greater than zero/);
+    expect(() => createDraft('100', '100')).toThrow(/greater than zero/);
   });
 });
 
 describe('the approval and certification chain', () => {
   it('allots a DBR number on submission and locks the bill for editing', () => {
-    const draft = createDraft('500', '0', '1000');
+    const draft = createDraft('500');
     const submitted = raBillService.submit(draft.id, ee, 'Measurements checked at site.');
 
     expect(submitted.status).toBe('IN_APPROVAL');
@@ -139,7 +175,7 @@ describe('the approval and certification chain', () => {
   });
 
   it('applies the ETP percentages to the admissible amount on certification', () => {
-    const draft = createDraft('1000', '0', '5');
+    const draft = createDraft('1000');
     raBillService.submit(draft.id, ee);
 
     // The worked example in the source form: 2% + 3% + 4% on ₹5,000 is ₹450.
@@ -164,7 +200,7 @@ describe('the approval and certification chain', () => {
   });
 
   it('refuses an admissible amount above what the contractor claimed', () => {
-    const draft = createDraft('1000', '0', '5');
+    const draft = createDraft('1000');
     raBillService.submit(draft.id, ee);
 
     expect(() =>
@@ -177,7 +213,7 @@ describe('the approval and certification chain', () => {
   });
 
   it('lets only the Executive Engineer certify', () => {
-    const draft = createDraft('1000', '0', '5');
+    const draft = createDraft('1000');
     raBillService.submit(draft.id, ee);
 
     expect(() =>
@@ -192,7 +228,7 @@ describe('the approval and certification chain', () => {
 
 describe('revising the deduction schedule', () => {
   it('recomputes percentage heads against the present bill amount', () => {
-    const draft = createDraft('1000', '0', '100');
+    const draft = createDraft('1000');
     raBillService.submit(draft.id, ee);
 
     const revised = raBillService.setDeductions(
@@ -207,14 +243,18 @@ describe('revising the deduction schedule', () => {
       accountClerk,
     );
 
-    // ₹1,00,000 gross: 2% = ₹2,000, 5% = ₹5,000, plus a flat ₹1,500.
-    expect(revised.amounts.presentBillAmount).toBe(100_000);
-    expect(revised.amounts.totalDeduction).toBe(8500);
-    expect(revised.amounts.netPayableAmount).toBe(91_500);
+    // The gross comes from the agreement, so the expected deductions are
+    // derived from it rather than assumed: 2% + 5% of gross, plus a flat ₹1,500.
+    const gross = 1000 * agreedRate();
+    const expectedDeduction = Math.round(gross * 0.02) + Math.round(gross * 0.05) + 1500;
+
+    expect(revised.amounts.presentBillAmount).toBe(gross);
+    expect(revised.amounts.totalDeduction).toBe(expectedDeduction);
+    expect(revised.amounts.netPayableAmount).toBe(gross - expectedDeduction);
   });
 
   it('refuses deductions that would swallow the whole bill', () => {
-    const draft = createDraft('1000', '0', '100');
+    const draft = createDraft('1000');
     raBillService.submit(draft.id, ee);
 
     expect(() =>
@@ -222,7 +262,13 @@ describe('revising the deduction schedule', () => {
         draft.id,
         raBillService.deductionsSchema.parse({
           deductions: [
-            { code: 'ADV', description: 'Recovery of advance', basis: 'AMOUNT', amount: '200000' },
+            {
+              code: 'ADV',
+              description: 'Recovery of advance',
+              basis: 'AMOUNT',
+              // Comfortably more than the bill is worth, whatever the agreed rate.
+              amount: String(1000 * agreedRate() + 1),
+            },
           ],
         }),
         accountClerk,
@@ -231,7 +277,7 @@ describe('revising the deduction schedule', () => {
   });
 
   it('refuses a percentage head with no rate', () => {
-    const draft = createDraft('1000', '0', '100');
+    const draft = createDraft('1000');
     raBillService.submit(draft.id, ee);
 
     expect(() =>
@@ -246,7 +292,7 @@ describe('revising the deduction schedule', () => {
   });
 
   it('keeps the accounts cadre in sole charge of deductions', () => {
-    const draft = createDraft('1000', '0', '100');
+    const draft = createDraft('1000');
     raBillService.submit(draft.id, ee);
 
     const contractor = userByUsername('contracts@shakticonstructions.example');

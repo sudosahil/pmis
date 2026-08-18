@@ -704,6 +704,102 @@ function seedContractors(ids: Ids): Ids {
  * No bytes are written — the folders are what a division would set up on day
  * one, and files arrive when someone uploads them.
  */
+/**
+ * The Schedule of Rates, and the agreement BOQ for the two live packages.
+ *
+ * Every BOQ line is priced against an SR item, so the agreed rate can be read
+ * against the sanctioned rate — which is the comparison the department actually
+ * makes when scrutinising a bill.
+ */
+function seedRatesAndBoq(pkgs: { pkgRoadId: number; pkgWaterId: number }): void {
+  const db = getDb();
+  const already = db.prepare(`SELECT COUNT(*) AS n FROM schedule_of_rates`).get() as { n: number };
+  if (already.n > 0) return;
+
+  const insertSr = db.prepare(
+    `INSERT INTO schedule_of_rates (code, name, chapter, uom, rate, sr_year)
+     VALUES (?, ?, ?, ?, ?, '2024-25')`,
+  );
+
+  // code, item of work, chapter, unit, rate in rupees
+  const rates: [string, string, string, string, number][] = [
+    ['2.8.1', 'Earthwork excavation in ordinary soil, including disposal up to 50 m', 'Earthwork', 'cum', 285],
+    ['2.8.4', 'Earthwork excavation in hard rock requiring blasting', 'Earthwork', 'cum', 640],
+    ['2.14.2', 'Filling in embankment with approved excavated earth, compacted in layers', 'Earthwork', 'cum', 198],
+    ['4.1.3', 'Providing and laying granular sub-base, Grade II', 'Roadwork', 'cum', 1_845],
+    ['4.4.1', 'Wet mix macadam, laid and compacted to specification', 'Roadwork', 'cum', 2_260],
+    ['4.11.2', 'Bituminous macadam, 50 mm compacted thickness', 'Roadwork', 'sqm', 412],
+    ['4.12.6', 'Semi dense bituminous concrete, 30 mm compacted thickness', 'Roadwork', 'sqm', 348],
+    ['5.3.2', 'Plain cement concrete M15, in foundation and plinth', 'Concrete', 'cum', 5_420],
+    ['5.6.1', 'Reinforced cement concrete M25, in situ, excluding steel', 'Concrete', 'cum', 7_180],
+    ['5.9.4', 'Thermo-mechanically treated reinforcement steel, cut, bent and placed', 'Concrete', 'MT', 78_500],
+    ['7.2.5', 'Providing and laying 300 mm dia DI pipe, K-9, including jointing', 'Pipeline', 'rmt', 2_450],
+    ['7.2.7', 'Providing and laying 450 mm dia DI pipe, K-9, including jointing', 'Pipeline', 'rmt', 3_890],
+    ['7.6.1', 'Providing and fixing 300 mm dia sluice valve with chamber', 'Pipeline', 'Nos', 46_200],
+    ['7.9.3', 'Hydraulic testing and disinfection of laid pipeline', 'Pipeline', 'rmt', 62],
+    ['9.4.2', 'Providing and fixing MS railing, painted, as per drawing', 'Miscellaneous', 'rmt', 1_240],
+  ];
+  const srIds: Record<string, { id: number; rate: number }> = {};
+  for (const [code, name, chapter, uom, rate] of rates) {
+    const id = Number(insertSr.run(code, name, chapter, uom, toPaise(rate)).lastInsertRowid);
+    srIds[code] = { id, rate: toPaise(rate) };
+  }
+
+  const insertBoq = db.prepare(
+    `INSERT INTO package_boq_items
+       (package_id, sl_no, item_code, description, uom, quantity, agreed_rate, amount, sr_item_id, sr_rate)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  /** Agreed rates sit a little off the SR, which is what a real tender produces. */
+  const addBoq = (
+    packageId: number,
+    lines: [string, number, number][], // SR code, quantity, agreed rate in rupees
+  ) => {
+    lines.forEach(([code, qty, agreed], index) => {
+      const sr = srIds[code]!;
+      const quantity = Math.round(qty * 1000);
+      const agreedRate = toPaise(agreed);
+      insertBoq.run(
+        packageId,
+        index + 1,
+        code,
+        rates.find((r) => r[0] === code)![1],
+        rates.find((r) => r[0] === code)![3],
+        quantity,
+        agreedRate,
+        Math.round((quantity * agreedRate) / 1000),
+        sr.id,
+        sr.rate,
+      );
+    });
+  };
+
+  // Ring road widening — earthwork through to the wearing course.
+  addBoq(pkgs.pkgRoadId, [
+    ['2.8.1', 18_400, 279],
+    ['2.8.4', 2_150, 655],
+    ['2.14.2', 12_600, 202],
+    ['4.1.3', 4_820, 1_798],
+    ['4.4.1', 3_940, 2_310],
+    ['4.11.2', 62_000, 405],
+    ['4.12.6', 62_000, 356],
+    ['5.6.1', 640, 7_050],
+    ['5.9.4', 48, 79_200],
+    ['9.4.2', 2_400, 1_215],
+  ]);
+
+  // Water supply distribution network — pipeline and appurtenances.
+  addBoq(pkgs.pkgWaterId, [
+    ['2.8.1', 9_800, 291],
+    ['7.2.5', 11_500, 2_398],
+    ['7.2.7', 3_200, 3_950],
+    ['7.6.1', 34, 45_800],
+    ['7.9.3', 14_700, 64],
+    ['5.3.2', 380, 5_310],
+  ]);
+}
+
 function seedWorkspace(ids: Ids, userIds: Ids): void {
   const db = getDb();
   const already = db.prepare(`SELECT COUNT(*) AS n FROM document_folders`).get() as { n: number };
@@ -956,6 +1052,7 @@ function seedDemoRecords(ids: Ids, userIds: Ids, contractorIds: Ids): void {
   );
 
   seedTenders(ids, userIds, contractorIds, projectIds, { pkgRoad2Id, pkgBldgId });
+  seedRatesAndBoq({ pkgRoadId, pkgWaterId });
   seedBills(ids, userIds, contractorIds, projectIds, { pkgRoadId, pkgWaterId });
   seedFunds(ids, userIds, projectIds);
   seedApprovalFlows(userIds, contractorIds);
