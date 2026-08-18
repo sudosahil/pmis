@@ -6,6 +6,9 @@ payment voucher. Built from the departmental documents in the root of this repos
 (project masters specification, the RA bill and miscellaneous bill workflow notes, the
 contractor registration form, and the e-Governance platform deck).
 
+**Live demonstration: https://pmis-gamma.vercel.app** — any account below, password
+`Pmis@12345`. It resets itself; see [The live demo](#the-live-demo).
+
 ---
 
 ## Running it
@@ -225,10 +228,42 @@ alone. Motion respects `prefers-reduced-motion`.
 
 ---
 
-## Deploying it
+## The live demo
 
-The site and the API are deployed separately, and the reason is worth stating
-plainly: **the API cannot run on a serverless host.** It keeps its database in a
+**https://pmis-gamma.vercel.app** — sign in with any account from the table above;
+the password is `Pmis@12345`.
+
+It redeploys automatically on every push to `main`.
+
+### What it is, and what it is not
+
+This is a **demonstration**. The whole thing runs on Vercel as one project: the
+site is served statically, and the API is a single serverless function wrapping
+the same Express app. A function's only writable directory is `/tmp`, which is
+wiped whenever the instance is recycled and is not shared between concurrent
+instances, so:
+
+- Bills raised, files uploaded and messages sent **do not survive**. Every
+  visitor gets the seeded department back in its known-good state.
+- Under enough traffic two people can be served by different instances and not
+  see each other's work.
+
+That is an acceptable trade for showing the system, and a bad one for running a
+department on. For real work the API belongs on a host with a mounted disk —
+`render.yaml` and the section below set that up, and the application code is
+identical either way.
+
+The demonstration database is seeded at build time and shipped as an asset, then
+copied into `/tmp` on cold start. Seeding at request time would spend several
+seconds bcrypt-hashing the accounts before the first page could answer.
+
+---
+
+## Deploying it for real
+
+For anything holding real work the site and the API are deployed separately,
+and the reason is worth stating plainly: **the API cannot run serverlessly
+without losing data.** It keeps its database in a
 SQLite file and writes uploaded documents to disk. On Vercel the filesystem is
 read-only apart from `/tmp`, which is wiped on every cold start and is not shared
 between concurrent instances — so the database would silently reset, uploads
