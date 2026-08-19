@@ -283,3 +283,85 @@ export function nextDprVersion(projectId: number, dprNo: string): number {
     .get(projectId, dprNo);
   return (row?.v ?? 0) + 1;
 }
+
+// --- Package progress updates ------------------------------------------------
+
+export interface ProgressUpdateRow {
+  id: number;
+  package_id: number;
+  contractor_id: number | null;
+  contractor_name: string | null;
+  update_date: string;
+  physical_progress_pct: number | null;
+  narrative: string;
+  status: string;
+  review_remarks: string | null;
+  reviewed_by: number | null;
+  reviewed_by_name: string | null;
+  reviewed_at: string | null;
+  submitted_by: number | null;
+  submitted_by_name: string | null;
+  photo_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+const PROGRESS_UPDATE_SELECT = `
+  SELECT pu.*, c.name AS contractor_name,
+         r.full_name AS reviewed_by_name, s.full_name AS submitted_by_name,
+         (SELECT COUNT(*) FROM documents doc
+            WHERE doc.entity_type = 'PACKAGE_PROGRESS_UPDATE' AND doc.entity_id = pu.id) AS photo_count
+    FROM package_progress_updates pu
+    LEFT JOIN contractors c ON c.id = pu.contractor_id
+    LEFT JOIN users r ON r.id = pu.reviewed_by
+    LEFT JOIN users s ON s.id = pu.submitted_by`;
+
+export function listProgressUpdates(packageId: number): ProgressUpdateRow[] {
+  return getDb()
+    .prepare(`${PROGRESS_UPDATE_SELECT} WHERE pu.package_id = ? ORDER BY pu.update_date DESC, pu.id DESC`)
+    .all(packageId) as ProgressUpdateRow[];
+}
+
+export function findProgressUpdate(id: number): ProgressUpdateRow | null {
+  return (
+    (getDb().prepare(`${PROGRESS_UPDATE_SELECT} WHERE pu.id = ?`).get(id) as
+      | ProgressUpdateRow
+      | undefined) ?? null
+  );
+}
+
+export function insertProgressUpdate(values: {
+  package_id: number;
+  contractor_id: number | null;
+  update_date: string;
+  physical_progress_pct: number | null;
+  narrative: string;
+  status: string;
+  submitted_by: number;
+}): number {
+  const result = getDb()
+    .prepare(
+      `INSERT INTO package_progress_updates
+         (package_id, contractor_id, update_date, physical_progress_pct, narrative, status, submitted_by)
+       VALUES
+         (@package_id, @contractor_id, @update_date, @physical_progress_pct, @narrative, @status, @submitted_by)`,
+    )
+    .run(values);
+  return Number(result.lastInsertRowid);
+}
+
+export function updateProgressUpdate(id: number, values: Record<string, unknown>): void {
+  const sets: string[] = [];
+  const params: Record<string, unknown> = { id };
+  for (const [key, value] of Object.entries(values)) {
+    if (value === undefined) continue;
+    sets.push(`${key} = @${key}`);
+    params[key] = value;
+  }
+  if (!sets.length) return;
+  getDb().prepare(`UPDATE package_progress_updates SET ${sets.join(', ')} WHERE id = @id`).run(params);
+}
+
+export function deleteProgressUpdate(id: number): void {
+  getDb().prepare(`DELETE FROM package_progress_updates WHERE id = ?`).run(id);
+}

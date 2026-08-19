@@ -3,10 +3,13 @@ import { ROLES } from '../config/constants.js';
 import { transaction } from '../db/index.js';
 import * as recordModel from '../models/record.model.js';
 import * as projectModel from '../models/project.model.js';
+import * as packageModel from '../models/package.model.js';
 import { insertAuditEntry } from '../models/audit.model.js';
 import { assertVisible as assertProjectVisible } from './project.service.js';
+import { assertVisible as assertPackageVisible } from './package.service.js';
+import * as documentService from './document.service.js';
 import type { AuthUser } from '../types/auth.js';
-import { conflict, forbidden, notFound } from '../utils/errors.js';
+import { badRequest, conflict, forbidden, notFound } from '../utils/errors.js';
 import { toRupees } from '../utils/money.js';
 import { isoDate, rupees } from '../middleware/validate.js';
 
@@ -79,6 +82,34 @@ export const dprDecisionSchema = z.object({
   approvedBy: z.string().trim().max(160).optional(),
   approvalDate: isoDate.optional(),
   remarks: z.string().trim().max(1000).optional(),
+});
+
+export const progressUpdateSchema = z.object({
+  updateDate: isoDate,
+  physicalProgressPct: z.coerce.number().int().min(0).max(100).optional(),
+  narrative: z.string().trim().min(3, 'Describe the work done since the last update.').max(4000),
+});
+
+export const progressReviewSchema = z
+  .object({
+    status: z.enum(['REVIEWED', 'RETURNED']),
+    remarks: z.string().trim().max(1000).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.status === 'RETURNED' && !value.remarks) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['remarks'],
+        message: 'Say what needs correcting before returning it.',
+      });
+    }
+  });
+
+export const progressPhotoMetaSchema = z.object({
+  latitude: z.coerce.number().min(-90).max(90, 'That does not look like a valid location.'),
+  longitude: z.coerce.number().min(-180).max(180, 'That does not look like a valid location.'),
+  capturedAt: z.string().trim().min(1, 'The capture time is required.').max(40),
+  description: z.string().trim().max(500).optional(),
 });
 
 // --- Noting sheet ----------------------------------------------------------
@@ -422,4 +453,198 @@ export function removeDpr(id: number, user: AuthUser): void {
     throw conflict('An approved DPR cannot be deleted.');
   }
   recordModel.deleteDpr(id);
+}
+
+// --- Package progress updates ------------------------------------------------
+
+interface UploadedFile {
+  originalname: string;
+  mimetype: string;
+  size: number;
+  buffer: Buffer;
+}
+
+function presentProgressUpdate(row: recordModel.ProgressUpdateRow) {
+  return {
+    id: row.id,
+    packageId: row.package_id,
+    contractor: row.contractor_id ? { id: row.contractor_id, name: row.contractor_name } : null,
+    updateDate: row.update_date,
+    physicalProgress: row.physical_progress_pct,
+    narrative: row.narrative,
+    status: row.status,
+    reviewRemarks: row.review_remarks,
+    reviewedBy: row.reviewed_by_name,
+    reviewedAt: row.reviewed_at,
+    submittedBy: row.submitted_by_name,
+    photoCount: row.photo_count,
+    createdAt: row.created_at,
+  };
+}
+
+function findPackageOrThrow(packageId: number, user: AuthUser): packageModel.PackageDetailRow {
+  const pkg = packageModel.findById(packageId);
+  if (!pkg) throw notFound('Package');
+  assertPackageVisible(pkg, user);
+  return pkg;
+}
+
+/** A contractor may only touch an update raised against their own package. */
+function assertOwnUpdate(update: recordModel.ProgressUpdateRow, user: AuthUser): void {
+  if (user.roleCode === ROLES.CONTRACTOR && update.submitted_by !== user.id) {
+    throw forbidden('This progress update was not submitted by you.');
+  }
+}
+
+export function listProgressUpdates(packageId: number, user: AuthUser) {
+  findPackageOrThrow(packageId, user);
+  return recordModel.listProgressUpdates(packageId).map(presentProgressUpdate);
+}
+
+export function addProgressUpdate(
+  packageId: number,
+  input: z.infer<typeof progressUpdateSchema>,
+  user: AuthUser,
+) {
+  const pkg = findPackageOrThrow(packageId, user);
+
+  if (user.roleCode === ROLES.CONTRACTOR && pkg.contractor_id !== user.contractorId) {
+    throw forbidden('This package is not awarded to you.');
+  }
+  if (!['AWARDED', 'IN_PROGRESS', 'COMPLETED'].includes(pkg.status)) {
+    throw conflict('Progress can only be logged once the package is awarded.');
+  }
+
+  const id = recordModel.insertProgressUpdate({
+    package_id: packageId,
+    contractor_id: pkg.contractor_id,
+    update_date: input.updateDate,
+    physical_progress_pct: input.physicalProgressPct ?? null,
+    narrative: input.narrative,
+    status: 'SUBMITTED',
+    submitted_by: user.id,
+  });
+
+  insertAuditEntry({
+    userId: user.id,
+    action: 'PROGRESS_UPDATE_SUBMITTED',
+    entityType: 'PACKAGE',
+    entityId: packageId,
+    detail: `Progress update for ${input.updateDate}${
+      input.physicalProgressPct !== undefined ? ` — ${input.physicalProgressPct}% complete` : ''
+    }`,
+  });
+
+  return presentProgressUpdate(recordModel.findProgressUpdate(id)!);
+}
+
+export function updateProgressUpdate(
+  id: number,
+  input: z.infer<typeof progressUpdateSchema>,
+  user: AuthUser,
+) {
+  const existing = recordModel.findProgressUpdate(id);
+  if (!existing) throw notFound('Progress update');
+  findPackageOrThrow(existing.package_id, user);
+  assertOwnUpdate(existing, user);
+
+  if (existing.status === 'REVIEWED') {
+    throw conflict('A reviewed update is a record and cannot be edited.');
+  }
+
+  // Correcting a returned update puts it back in front of the reviewer.
+  recordModel.updateProgressUpdate(id, {
+    update_date: input.updateDate,
+    physical_progress_pct: input.physicalProgressPct ?? null,
+    narrative: input.narrative,
+    status: 'SUBMITTED',
+    review_remarks: null,
+    reviewed_by: null,
+    reviewed_at: null,
+  });
+
+  return presentProgressUpdate(recordModel.findProgressUpdate(id)!);
+}
+
+export function reviewProgressUpdate(
+  id: number,
+  input: z.infer<typeof progressReviewSchema>,
+  user: AuthUser,
+) {
+  const existing = recordModel.findProgressUpdate(id);
+  if (!existing) throw notFound('Progress update');
+  findPackageOrThrow(existing.package_id, user);
+
+  if (existing.status !== 'SUBMITTED') {
+    throw conflict('This update has already been decided.');
+  }
+
+  recordModel.updateProgressUpdate(id, {
+    status: input.status,
+    review_remarks: input.remarks ?? null,
+    reviewed_by: user.id,
+    reviewed_at: new Date().toISOString(),
+  });
+
+  insertAuditEntry({
+    userId: user.id,
+    action: `PROGRESS_UPDATE_${input.status}`,
+    entityType: 'PACKAGE',
+    entityId: existing.package_id,
+    detail: `Progress update of ${existing.update_date} ${input.status.toLowerCase()}`,
+  });
+
+  return presentProgressUpdate(recordModel.findProgressUpdate(id)!);
+}
+
+export function removeProgressUpdate(id: number, user: AuthUser): void {
+  const existing = recordModel.findProgressUpdate(id);
+  if (!existing) throw notFound('Progress update');
+  findPackageOrThrow(existing.package_id, user);
+  assertOwnUpdate(existing, user);
+
+  if (existing.status === 'REVIEWED') {
+    throw conflict('A reviewed update cannot be deleted.');
+  }
+  recordModel.deleteProgressUpdate(id);
+}
+
+/**
+ * Attaches a geotagged site photograph to a progress update. The file itself
+ * goes through the same store as every other document; what is specific here
+ * is that a photo is required to carry the location and time it was taken,
+ * and that it may only be added while the update is still open for review.
+ */
+export function addProgressPhoto(
+  updateId: number,
+  file: UploadedFile,
+  meta: z.infer<typeof progressPhotoMetaSchema>,
+  user: AuthUser,
+) {
+  const existing = recordModel.findProgressUpdate(updateId);
+  if (!existing) throw notFound('Progress update');
+  const pkg = findPackageOrThrow(existing.package_id, user);
+  assertOwnUpdate(existing, user);
+
+  if (existing.status === 'REVIEWED') {
+    throw conflict('This update has already been reviewed; photographs can no longer be attached.');
+  }
+  if (!file.mimetype.startsWith('image/')) {
+    throw badRequest('Only photographs may be attached to a progress update.');
+  }
+
+  return documentService.upload(
+    file,
+    {
+      entityType: 'PACKAGE_PROGRESS_UPDATE',
+      entityId: updateId,
+      category: 'PHOTOGRAPH',
+      description: meta.description,
+      latitude: meta.latitude,
+      longitude: meta.longitude,
+      capturedAt: meta.capturedAt,
+    },
+    user,
+    pkg.division_id,
+  );
 }

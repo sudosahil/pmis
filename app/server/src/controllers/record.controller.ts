@@ -3,7 +3,7 @@ import type { z } from 'zod';
 import * as recordService from '../services/record.service.js';
 import * as boqService from '../services/boq.service.js';
 import { created, noContent, ok } from '../utils/respond.js';
-import { unauthorized } from '../utils/errors.js';
+import { badRequest, unauthorized } from '../utils/errors.js';
 
 function requireUser(req: Request) {
   if (!req.user) throw unauthorized();
@@ -132,4 +132,64 @@ export function decideDpr(req: Request, res: Response): void {
 export function removeDpr(req: Request, res: Response): void {
   recordService.removeDpr(Number(req.params.dprId), requireUser(req));
   noContent(res);
+}
+
+// --- Package progress updates -----------------------------------------------
+
+export function listProgressUpdates(req: Request, res: Response): void {
+  ok(res, recordService.listProgressUpdates(Number(req.params.id), requireUser(req)));
+}
+
+export function addProgressUpdate(req: Request, res: Response): void {
+  created(
+    res,
+    recordService.addProgressUpdate(
+      Number(req.params.id),
+      req.body as z.infer<typeof recordService.progressUpdateSchema>,
+      requireUser(req),
+    ),
+  );
+}
+
+export function updateProgressUpdate(req: Request, res: Response): void {
+  ok(
+    res,
+    recordService.updateProgressUpdate(
+      Number(req.params.updateId),
+      req.body as z.infer<typeof recordService.progressUpdateSchema>,
+      requireUser(req),
+    ),
+  );
+}
+
+export function reviewProgressUpdate(req: Request, res: Response): void {
+  ok(
+    res,
+    recordService.reviewProgressUpdate(
+      Number(req.params.updateId),
+      req.body as z.infer<typeof recordService.progressReviewSchema>,
+      requireUser(req),
+    ),
+  );
+}
+
+export function removeProgressUpdate(req: Request, res: Response): void {
+  recordService.removeProgressUpdate(Number(req.params.updateId), requireUser(req));
+  noContent(res);
+}
+
+export function addProgressPhoto(req: Request, res: Response): void {
+  const user = requireUser(req);
+  if (!req.file) throw badRequest('Choose a photograph to upload.');
+
+  const parsed = recordService.progressPhotoMetaSchema.safeParse(req.body);
+  if (!parsed.success) {
+    const details: Record<string, string> = {};
+    for (const issue of parsed.error.issues) {
+      details[issue.path.join('.') || '_'] = issue.message;
+    }
+    throw badRequest('Some fields need attention.', details);
+  }
+
+  created(res, recordService.addProgressPhoto(Number(req.params.updateId), req.file, parsed.data, user));
 }

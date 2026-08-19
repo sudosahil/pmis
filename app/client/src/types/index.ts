@@ -303,6 +303,22 @@ export interface Package {
   createdAt: string;
 }
 
+export interface PackageProgressUpdate {
+  id: number;
+  packageId: number;
+  contractor: { id: number; name: string | null } | null;
+  updateDate: string;
+  physicalProgress: number | null;
+  narrative: string;
+  status: 'SUBMITTED' | 'REVIEWED' | 'RETURNED';
+  reviewRemarks: string | null;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  submittedBy: string | null;
+  photoCount: number;
+  createdAt: string;
+}
+
 // --- Contractors -----------------------------------------------------------
 
 export interface Contractor {
@@ -833,6 +849,10 @@ export interface StoredDocument {
   uploadedBy: string | null;
   uploadedById: number | null;
   downloadCount: number;
+  /** Set only for a geotagged photograph, e.g. a site progress photo. */
+  latitude: string | null;
+  longitude: string | null;
+  capturedAt: string | null;
   createdAt: string;
 }
 

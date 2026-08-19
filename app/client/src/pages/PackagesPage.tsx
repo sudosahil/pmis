@@ -14,6 +14,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { BoqPanel } from '../components/BoqPanel';
 import { Attachments } from '../components/Attachments';
 import { NotingSheet } from '../components/NotingSheet';
+import { ProgressUpdatesPanel } from '../components/ProgressUpdatesPanel';
 import { Modal } from '../components/Modal';
 import { useToast } from '../components/Toast';
 import { useLookup } from '../hooks/useLookup';
@@ -152,7 +153,7 @@ export function PackagesPage() {
 export function PackageDetailPage() {
   const { id } = useParams<{ id: string }>();
   const packageId = Number(id);
-  const { hasRole, isContractor } = useAuth();
+  const { hasRole, isContractor, can } = useAuth();
   const [editing, setEditing] = useState(false);
 
   const pkg = useQuery({
@@ -175,6 +176,9 @@ export function PackageDetailPage() {
   const canRaiseBill =
     (isContractor || hasRole('ADMIN', 'EE', 'AEE', 'AE', 'AC')) &&
     ['AWARDED', 'IN_PROGRESS', 'COMPLETED'].includes(p.status);
+  const canSubmitProgress =
+    can('packages.progress.submit') && ['AWARDED', 'IN_PROGRESS', 'COMPLETED'].includes(p.status);
+  const canReviewProgress = can('projects.manage');
 
   return (
     <>
@@ -302,6 +306,12 @@ export function PackageDetailPage() {
             }}
           />
         </Card>
+
+        <ProgressUpdatesPanel
+          packageId={p.id}
+          canSubmit={canSubmitProgress}
+          canReview={canReviewProgress}
+        />
 
         <BoqPanel packageId={p.id} />
 

@@ -227,23 +227,31 @@ async function uploadFile<T>(
 }
 
 /**
- * Downloads through fetch rather than a plain link so the bearer token travels
- * with the request, then hands the blob to the browser to save.
+ * Fetches the bytes with the bearer token attached and hands back a blob URL
+ * — for a plain `<a href>` or `<img src>`, which cannot carry an auth header
+ * of their own. The caller owns the URL and must revoke it when done.
  */
-async function downloadFile(path: string, fallbackName: string): Promise<void> {
+async function fetchBlobUrl(path: string): Promise<string> {
   const token = tokenStore.access;
   const response = await fetch(buildUrl(path), {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!response.ok) {
     throw new ApiError(response.status, {
-      message: 'That file could not be downloaded.',
+      message: 'That file could not be fetched.',
       code: 'DOWNLOAD_FAILED',
     });
   }
-
   const blob = await response.blob();
-  const url = URL.createObjectURL(blob);
+  return URL.createObjectURL(blob);
+}
+
+/**
+ * Downloads through fetch rather than a plain link so the bearer token travels
+ * with the request, then hands the blob to the browser to save.
+ */
+async function downloadFile(path: string, fallbackName: string): Promise<void> {
+  const url = await fetchBlobUrl(path);
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = fallbackName;
@@ -265,6 +273,7 @@ export const api = {
     send<T>(path, { method: 'POST', body, anonymous: true }),
   upload: uploadFile,
   download: downloadFile,
+  blobUrl: fetchBlobUrl,
 };
 
 /** Shape returned by every paginated list endpoint. */

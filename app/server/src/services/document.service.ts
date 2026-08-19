@@ -64,6 +64,7 @@ export const ATTACHABLE_ENTITIES = [
   'MISC_BILL',
   'CONTRACTOR',
   'LOC',
+  'PACKAGE_PROGRESS_UPDATE',
 ] as const;
 
 // --- Schemas ---------------------------------------------------------------
@@ -90,6 +91,10 @@ export const uploadMetadataSchema = z.object({
   category: z.enum(DOCUMENT_CATEGORIES).default('GENERAL'),
   description: z.string().trim().max(500).optional(),
   name: z.string().trim().max(200).optional(),
+  /** Where and when a photograph was taken — carried by the browser's geolocation API. */
+  latitude: z.coerce.number().min(-90).max(90).optional(),
+  longitude: z.coerce.number().min(-180).max(180).optional(),
+  capturedAt: z.string().trim().max(40).optional(),
 });
 
 export const updateDocumentSchema = z.object({
@@ -158,6 +163,9 @@ export function presentDocument(row: documentModel.DocumentRow) {
     uploadedBy: row.uploaded_by_name,
     uploadedById: row.uploaded_by,
     downloadCount: row.download_count,
+    latitude: row.latitude,
+    longitude: row.longitude,
+    capturedAt: row.captured_at,
     createdAt: row.created_at,
   };
 }
@@ -334,6 +342,13 @@ export function upload(
   file: UploadedFile,
   input: z.infer<typeof uploadMetadataSchema>,
   user: AuthUser,
+  /**
+   * Overrides the usual "uploader's own division" rule. Used when the
+   * uploader has no division of their own — a contractor — so the file is
+   * still scoped to the division that owns the record it is filed against,
+   * rather than becoming visible department-wide.
+   */
+  divisionIdOverride?: number | null,
 ) {
   if (!file) throw badRequest('Choose a file to upload.');
   if (file.size <= 0) throw badRequest('That file is empty.');
@@ -380,8 +395,14 @@ export function upload(
         entity_id: input.entityId ?? null,
         category: input.category,
         description: input.description ?? null,
-        division_id: isHeadOffice(user) ? null : user.divisionId ?? null,
+        division_id:
+          divisionIdOverride !== undefined
+            ? divisionIdOverride
+            : isHeadOffice(user) ? null : user.divisionId ?? null,
         uploaded_by: user.id,
+        latitude: input.latitude !== undefined ? String(input.latitude) : null,
+        longitude: input.longitude !== undefined ? String(input.longitude) : null,
+        captured_at: input.capturedAt ?? null,
       });
 
       insertAuditEntry({

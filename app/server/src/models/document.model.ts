@@ -34,6 +34,9 @@ export interface DocumentRow {
   uploaded_by: number | null;
   uploaded_by_name: string | null;
   download_count: number;
+  latitude: string | null;
+  longitude: string | null;
+  captured_at: string | null;
   created_at: string;
 }
 
@@ -52,7 +55,8 @@ const DOCUMENT_SELECT = `
   SELECT doc.id, doc.name, doc.stored_name, doc.mime_type, doc.extension, doc.size_bytes,
          doc.checksum, doc.folder_id, f.name AS folder_name, doc.entity_type, doc.entity_id,
          doc.category, doc.description, doc.division_id, d.name AS division_name,
-         doc.uploaded_by, u.full_name AS uploaded_by_name, doc.download_count, doc.created_at
+         doc.uploaded_by, u.full_name AS uploaded_by_name, doc.download_count,
+         doc.latitude, doc.longitude, doc.captured_at, doc.created_at
     FROM documents doc
     LEFT JOIN document_folders f ON f.id = doc.folder_id
     LEFT JOIN divisions d ON d.id = doc.division_id
@@ -249,17 +253,22 @@ export function insertDocument(values: {
   description: string | null;
   division_id: number | null;
   uploaded_by: number;
+  latitude?: string | null;
+  longitude?: string | null;
+  captured_at?: string | null;
 }): number {
   const result = getDb()
     .prepare(
       `INSERT INTO documents
          (name, stored_name, mime_type, extension, size_bytes, checksum, folder_id,
-          entity_type, entity_id, category, description, division_id, uploaded_by)
+          entity_type, entity_id, category, description, division_id, uploaded_by,
+          latitude, longitude, captured_at)
        VALUES
          (@name, @stored_name, @mime_type, @extension, @size_bytes, @checksum, @folder_id,
-          @entity_type, @entity_id, @category, @description, @division_id, @uploaded_by)`,
+          @entity_type, @entity_id, @category, @description, @division_id, @uploaded_by,
+          @latitude, @longitude, @captured_at)`,
     )
-    .run(values);
+    .run({ latitude: null, longitude: null, captured_at: null, ...values });
   return Number(result.lastInsertRowid);
 }
 

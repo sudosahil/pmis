@@ -48,6 +48,13 @@ export const PERMISSIONS: PermissionDefinition[] = [
     description: 'Raise a project, edit it, send it for sanction and maintain its milestones and packages.',
     group: 'Works',
   },
+  {
+    key: 'packages.progress.submit',
+    label: 'Submit a site progress update',
+    description:
+      'Record a dated update against an awarded package — physical progress, a note, and geotagged site photographs. Held by contractors.',
+    group: 'Works',
+  },
 
   // --- Procurement ---------------------------------------------------------
   {
@@ -383,8 +390,12 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   // A contractor sees only their own work, which the scoping rules enforce
   // separately; these are the surfaces they may reach at all.
   [ROLES.CONTRACTOR]: [
+    // Scoped to their own projects and packages by scopeFilter() — this is
+    // what lets the dashboard's own "my work packages" links actually open.
+    'projects.view',
     'tenders.view', 'tenders.bid',
     'bills.ra.view', 'bills.ra.raise',
+    'packages.progress.submit',
     'files.view', 'chat.use',
   ],
 };

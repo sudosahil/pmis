@@ -15,6 +15,7 @@ const TONES: Record<string, Tone> = {
   PENDING_SANCTION: 'warn',
   RETURNED: 'warn',
   APPROVED: 'ok',
+  REVIEWED: 'ok',
   SANCTIONED: 'ok',
   VERIFIED: 'ok',
   COMPLETED: 'ok',

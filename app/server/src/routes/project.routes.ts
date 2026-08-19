@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import multer from 'multer';
 import * as controller from '../controllers/project.controller.js';
 import {
   createProjectSchema,
@@ -11,8 +12,27 @@ import { authenticate, requirePermission } from '../middleware/auth.js';
 import * as recordController from '../controllers/record.controller.js';
 import * as recordService from '../services/record.service.js';
 import * as boqService from '../services/boq.service.js';
+import * as documentService from '../services/document.service.js';
 import { asyncHandler } from '../middleware/error.js';
 import { validate } from '../middleware/validate.js';
+import { badRequest } from '../utils/errors.js';
+
+/** A progress photo is buffered the same way, and screened the same way, as any other upload. */
+const photoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: documentService.MAX_UPLOAD_BYTES, files: 1, fields: 6, fieldSize: 2000 },
+  fileFilter: (_req, file, callback) => {
+    if (!documentService.isAcceptedUpload(file.mimetype, file.originalname)) {
+      callback(
+        badRequest(
+          `That file type is not accepted. Allowed types: ${documentService.describeAcceptedTypes()}.`,
+        ),
+      );
+      return;
+    }
+    callback(null, true);
+  },
+});
 
 /** Roles that may author project and package records. */
 const AUTHORING_ROLES = [ROLES.ADMIN, ROLES.CE, ROLES.SE, ROLES.EE, ROLES.AEE, ROLES.AE] as const;
@@ -133,4 +153,39 @@ projectRouter.delete(
   '/:id/dprs/:dprId',
   requirePermission('projects.manage'),
   asyncHandler(recordController.removeDpr),
+);
+
+// --- Progress updates --------------------------------------------------------
+// Dated site updates a contractor files against a package, with geotagged
+// photographs. Reviewed once by the officer in charge.
+
+packageRouter.get('/:id/progress-updates', asyncHandler(recordController.listProgressUpdates));
+packageRouter.post(
+  '/:id/progress-updates',
+  requirePermission('packages.progress.submit'),
+  validate(recordService.progressUpdateSchema),
+  asyncHandler(recordController.addProgressUpdate),
+);
+packageRouter.patch(
+  '/:id/progress-updates/:updateId',
+  requirePermission('packages.progress.submit'),
+  validate(recordService.progressUpdateSchema),
+  asyncHandler(recordController.updateProgressUpdate),
+);
+packageRouter.post(
+  '/:id/progress-updates/:updateId/review',
+  requirePermission('projects.manage'),
+  validate(recordService.progressReviewSchema),
+  asyncHandler(recordController.reviewProgressUpdate),
+);
+packageRouter.delete(
+  '/:id/progress-updates/:updateId',
+  requirePermission('packages.progress.submit'),
+  asyncHandler(recordController.removeProgressUpdate),
+);
+packageRouter.post(
+  '/:id/progress-updates/:updateId/photos',
+  requirePermission('packages.progress.submit'),
+  photoUpload.single('file'),
+  asyncHandler(recordController.addProgressPhoto),
 );

@@ -526,6 +526,29 @@ CREATE INDEX IF NOT EXISTS idx_packages_work_type ON packages(work_type_id);
 CREATE INDEX IF NOT EXISTS idx_packages_status ON packages(status);
 CREATE INDEX IF NOT EXISTS idx_packages_created_by ON packages(created_by);
 
+-- A dated site update the contractor files against a package — physical
+-- progress, a narrative, and (via the documents table) geotagged photographs.
+-- Reviewed once by the officer in charge; a returned update may be corrected
+-- and resubmitted, an accepted one becomes a record.
+CREATE TABLE IF NOT EXISTS package_progress_updates (
+  id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+  package_id             INTEGER NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
+  contractor_id          INTEGER REFERENCES contractors(id) ON DELETE SET NULL,
+  update_date            TEXT NOT NULL,
+  physical_progress_pct  INTEGER,
+  narrative              TEXT NOT NULL,
+  status                 TEXT NOT NULL DEFAULT 'SUBMITTED', -- SUBMITTED | REVIEWED | RETURNED
+  review_remarks         TEXT,
+  reviewed_by            INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at            TEXT,
+  submitted_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at             TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at             TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_progress_updates_package ON package_progress_updates(package_id);
+CREATE INDEX IF NOT EXISTS idx_progress_updates_status ON package_progress_updates(status);
+CREATE INDEX IF NOT EXISTS idx_progress_updates_contractor ON package_progress_updates(contractor_id);
+
 -- ---------------------------------------------------------------------------
 -- 7. PROCUREMENT / TENDERING
 -- ---------------------------------------------------------------------------
@@ -938,6 +961,11 @@ CREATE TABLE IF NOT EXISTS documents (
   division_id   INTEGER REFERENCES divisions(id) ON DELETE SET NULL,
   uploaded_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
   download_count INTEGER NOT NULL DEFAULT 0,
+  -- Set only for a photograph captured with its location, e.g. a contractor's
+  -- site progress photo. NULL for everything filed the ordinary way.
+  latitude      TEXT,
+  longitude     TEXT,
+  captured_at   TEXT,
   created_at    TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
