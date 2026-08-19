@@ -12,6 +12,7 @@ const DEMO_ACCOUNTS: { username: string; role: string }[] = [
   { username: 'cao.desai', role: 'Chief Accounts Officer' },
   { username: 'md.rao', role: 'Managing Director' },
   { username: 'admin', role: 'System Administrator' },
+  { username: 'contracts@shakticonstructions.example', role: 'Contractor' },
 ];
 
 const HIGHLIGHTS = [
