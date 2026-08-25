@@ -756,6 +756,331 @@ export interface SrHistoryEntry {
   changedAt: string;
 }
 
+// --- Casework: land acquisition ---------------------------------------------
+
+export const LAND_TYPES = [
+  'AGRICULTURAL', 'RESIDENTIAL', 'COMMERCIAL', 'INDUSTRIAL', 'GOVERNMENT', 'FOREST',
+] as const;
+
+export type LandType = (typeof LAND_TYPES)[number];
+
+/** The stages of the 2013 Act, in the order a parcel must pass through them. */
+export const LAND_STAGES = [
+  { key: 'NOTIFIED', label: 'Preliminary notification', section: 'Section 11' },
+  { key: 'DECLARED', label: 'Declaration', section: 'Section 19' },
+  { key: 'AWARDED', label: 'Award', section: 'Section 23' },
+  { key: 'POSSESSED', label: 'Possession taken', section: '' },
+] as const;
+
+export interface LandParcel {
+  id: number;
+  parcelNo: string;
+  project: { id: number; code: string; name: string };
+  packageId: number | null;
+  packageCode: string | null;
+  division: { id: number; code: string; name: string };
+  district: string | null;
+  village: string;
+  surveyNo: string;
+  khataNo: string | null;
+  landType: LandType;
+  areaSqm: number;
+  areaAcres: number;
+  owner: { name: string; address: string | null; contact: string | null };
+  stages: {
+    notification: { no: string | null; date: string | null };
+    declaration: { no: string | null; date: string | null };
+    award: { no: string | null; date: string | null };
+    possessionDate: string | null;
+  };
+  compensation: {
+    marketValue: number;
+    solatium: number;
+    interest: number;
+    other: number;
+    total: number;
+    paid: number;
+    balance: number;
+    isFullyPaid: boolean;
+    paymentCount: number;
+  };
+  status: string;
+  openCaseCount: number;
+  remarks: string | null;
+  document: { id: number; name: string | null } | null;
+  workflowInstanceId: number | null;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+export interface LandPayment {
+  id: number;
+  paymentDate: string;
+  amount: number;
+  mode: string;
+  referenceNo: string | null;
+  payeeName: string;
+  remarks: string | null;
+  recordedBy: string | null;
+  createdAt: string;
+}
+
+export interface LandParcelDetail extends LandParcel {
+  payments: LandPayment[];
+  workflow: WorkflowView | null;
+}
+
+// --- Casework: court cases ---------------------------------------------------
+
+export const COURT_TYPES = [
+  'SUPREME_COURT', 'HIGH_COURT', 'DISTRICT_COURT', 'TRIBUNAL', 'LOK_ADALAT', 'ARBITRATION',
+] as const;
+
+export const CASE_TYPES = [
+  'WRIT', 'CIVIL', 'ARBITRATION', 'CONTEMPT', 'LAND_ACQUISITION', 'SERVICE', 'OTHER',
+] as const;
+
+export const CASE_OUTCOMES = [
+  'IN_FAVOUR', 'AGAINST', 'PARTLY_IN_FAVOUR', 'SETTLED', 'WITHDRAWN',
+] as const;
+
+export interface CourtCase {
+  id: number;
+  caseNo: string;
+  internalRef: string | null;
+  court: { name: string; type: string };
+  caseType: string;
+  filedBy: 'BY_DEPARTMENT' | 'AGAINST_DEPARTMENT';
+  isRespondent: boolean;
+  petitioner: string;
+  respondent: string;
+  subject: string;
+  filingDate: string;
+  division: { id: number; code: string | null; name: string | null } | null;
+  project: { id: number; code: string | null; name: string | null } | null;
+  packageCode: string | null;
+  parcel: { id: number; parcelNo: string | null } | null;
+  contractor: { id: number; name: string | null } | null;
+  claimAmount: number;
+  decreeAmount: number;
+  advocate: { name: string | null; fee: number };
+  dealingOfficer: { id: number; name: string | null } | null;
+  nextHearingDate: string | null;
+  isListedToday: boolean;
+  isHearingMissed: boolean;
+  status: string;
+  outcome: string | null;
+  disposalDate: string | null;
+  isClosed: boolean;
+  hearingCount: number;
+  lastHearingDate: string | null;
+  remarks: string | null;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+export interface CourtHearing {
+  id: number;
+  hearingDate: string;
+  purpose: string | null;
+  appearedBy: string | null;
+  proceedings: string | null;
+  orderSummary: string | null;
+  nextDate: string | null;
+  document: { id: number; name: string | null } | null;
+  recordedBy: string | null;
+  createdAt: string;
+}
+
+export interface CourtCaseDetail extends CourtCase {
+  hearings: CourtHearing[];
+}
+
+// --- Casework: committees and meetings ---------------------------------------
+
+export const COMMITTEE_KINDS = [
+  'TENDER', 'TECHNICAL', 'PURCHASE', 'GRIEVANCE', 'BOARD', 'REVIEW', 'OTHER',
+] as const;
+
+export const MEMBER_ROLES = [
+  'CHAIRPERSON', 'MEMBER_SECRETARY', 'MEMBER', 'SPECIAL_INVITEE',
+] as const;
+
+export type MemberRole = (typeof MEMBER_ROLES)[number];
+
+export interface Committee {
+  id: number;
+  code: string;
+  name: string;
+  kind: string;
+  purpose: string | null;
+  division: { id: number; code: string | null; name: string | null } | null;
+  quorum: number;
+  status: string;
+  memberCount: number;
+  meetingCount: number;
+  lastMeetingAt: string | null;
+  openActions: number;
+  isQuorate: boolean;
+  createdAt: string;
+}
+
+export interface CommitteeMember {
+  userId: number;
+  name: string;
+  email: string;
+  roleCode: string;
+  memberRole: MemberRole;
+  designation: string | null;
+}
+
+export interface Meeting {
+  id: number;
+  committee: { id: number; code: string; name: string; quorum: number };
+  meetingNo: string;
+  title: string;
+  scheduledAt: string;
+  venue: string | null;
+  mode: string;
+  agenda: string | null;
+  status: string;
+  heldAt: string | null;
+  minutes: string | null;
+  minutesBy: string | null;
+  invitedCount: number;
+  presentCount: number;
+  hasQuorum: boolean;
+  decisionCount: number;
+  openActions: number;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+export interface MeetingDecision {
+  id: number;
+  seq: number;
+  subject: string;
+  decision: string;
+  actionBy: { id: number; name: string | null } | null;
+  dueDate: string | null;
+  status: 'OPEN' | 'DONE' | 'DROPPED';
+  isOverdue: boolean;
+  closedOn: string | null;
+  closingNote: string | null;
+}
+
+export interface MeetingDetail extends Meeting {
+  attendance: {
+    userId: number;
+    name: string;
+    roleCode: string;
+    memberRole: MemberRole | null;
+    isPresent: boolean;
+    remarks: string | null;
+  }[];
+  decisions: MeetingDecision[];
+}
+
+export interface CommitteeDetail extends Committee {
+  members: CommitteeMember[];
+  meetings: Meeting[];
+}
+
+export interface CommitteeAction {
+  id: number;
+  meetingId: number;
+  meetingNo: string;
+  meetingTitle: string;
+  committeeName: string;
+  subject: string;
+  decision: string;
+  dueDate: string | null;
+  isOverdue: boolean;
+}
+
+// --- Casework: Right to Information ------------------------------------------
+
+export const RTI_RECEIVED_VIA = [
+  'ONLINE', 'RTI_PORTAL', 'POST', 'COUNTER', 'TRANSFERRED_IN',
+] as const;
+
+export interface RtiExemption {
+  code: string;
+  label: string;
+}
+
+export interface RtiRequest {
+  id: number;
+  requestNo: string;
+  applicant: {
+    name: string;
+    address: string | null;
+    email: string | null;
+    phone: string | null;
+    isBpl: boolean;
+  };
+  feePaid: number;
+  receivedOn: string;
+  receivedVia: string;
+  subject: string;
+  informationSought: string;
+  isLifeOrLiberty: boolean;
+  division: { id: number; code: string | null; name: string | null } | null;
+  pio: { id: number; name: string | null } | null;
+  dueDate: string;
+  daysRemaining: number;
+  isOpen: boolean;
+  isOverdue: boolean;
+  /** Section 20: ₹250 a day, to a ceiling of ₹25,000, on the officer personally. */
+  penaltyExposure: number;
+  status: string;
+  replyDate: string | null;
+  replySummary: string | null;
+  daysTaken: number | null;
+  wasLate: boolean;
+  rejection: { section: string; label: string | null; ground: string | null } | null;
+  transferredTo: string | null;
+  appealCount: number;
+  document: { id: number; name: string | null } | null;
+  remarks: string | null;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+export interface RtiAppeal {
+  id: number;
+  appealNo: string;
+  level: 'FIRST' | 'SECOND';
+  filedOn: string;
+  grounds: string;
+  appellateAuthority: string | null;
+  authority: { id: number; name: string | null } | null;
+  dueDate: string;
+  daysRemaining: number;
+  isOverdue: boolean;
+  status: string;
+  decidedOn: string | null;
+  decision: string | null;
+  penaltyImposed: number;
+  remarks: string | null;
+}
+
+export interface RtiRequestDetail extends RtiRequest {
+  appeals: RtiAppeal[];
+}
+
+/** What an Information Commission asks a public authority for. */
+export interface RtiCompliance {
+  total: number;
+  open: number;
+  overdue: number;
+  replied: number;
+  rejected: number;
+  onTime: number;
+  late: number;
+  appeals: number;
+}
+
 // --- Bills -----------------------------------------------------------------
 
 export interface RaBillItem {

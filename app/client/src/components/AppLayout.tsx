@@ -69,6 +69,15 @@ const NAV: NavGroup[] = [
     ],
   },
   {
+    title: 'Casework',
+    items: [
+      { to: '/land', label: 'Land acquisition', icon: <LayersIcon />, permission: 'land.view' },
+      { to: '/court-cases', label: 'Court cases', icon: <GavelIcon />, permission: 'court.view' },
+      { to: '/committees', label: 'Committees', icon: <UsersIcon />, permission: 'committees.view' },
+      { to: '/rti', label: 'Right to Information', icon: <FileTextIcon />, permission: 'rti.view' },
+    ],
+  },
+  {
     title: 'Analytics',
     items: [
       { to: '/reports', label: 'Reports & MIS', icon: <ChartIcon />, permission: 'reports.view' },

@@ -38,6 +38,7 @@ export const WORKFLOWS = {
   MISC_BILL: 'MISC_BILL',
   CONTRACTOR_REGISTRATION: 'CONTRACTOR_REGISTRATION',
   LOC_APPROVAL: 'LOC_APPROVAL',
+  LAND_ACQUISITION: 'LAND_ACQUISITION',
 } as const;
 
 export type WorkflowCode = (typeof WORKFLOWS)[keyof typeof WORKFLOWS];
@@ -49,6 +50,7 @@ export const ENTITY_TYPES = {
   MISC_BILL: 'MISC_BILL',
   CONTRACTOR: 'CONTRACTOR',
   LOC: 'LOC',
+  LAND_PARCEL: 'LAND_PARCEL',
 } as const;
 
 export type EntityType = (typeof ENTITY_TYPES)[keyof typeof ENTITY_TYPES];
@@ -115,3 +117,45 @@ export const PACKAGE_STATUS = {
 } as const;
 
 export const MISC_BILL_CATEGORIES = ['PROJECT_EXPENSE', 'REVENUE_EXPENSE', 'REFUND'] as const;
+
+/**
+ * A land parcel moves through the stages the 2013 Act lays down, and it cannot
+ * skip one: an award before a declaration, or a declaration before the
+ * preliminary notification, is not an acquisition a court would recognise.
+ */
+export const LAND_PARCEL_STATUS = {
+  IDENTIFIED: 'IDENTIFIED',
+  NOTIFIED: 'NOTIFIED',
+  DECLARED: 'DECLARED',
+  AWARDED: 'AWARDED',
+  COMPENSATED: 'COMPENSATED',
+  POSSESSED: 'POSSESSED',
+  DISPUTED: 'DISPUTED',
+  WITHDRAWN: 'WITHDRAWN',
+} as const;
+
+/** The order the stages run in, used to refuse a step taken out of turn. */
+export const LAND_PARCEL_SEQUENCE: string[] = [
+  LAND_PARCEL_STATUS.IDENTIFIED,
+  LAND_PARCEL_STATUS.NOTIFIED,
+  LAND_PARCEL_STATUS.DECLARED,
+  LAND_PARCEL_STATUS.AWARDED,
+  LAND_PARCEL_STATUS.COMPENSATED,
+  LAND_PARCEL_STATUS.POSSESSED,
+];
+
+/**
+ * The Right to Information Act's clocks, in days. Missing the first one costs
+ * the Public Information Officer ₹250 a day out of their own pocket, so the
+ * figures are constants rather than something a form can be talked into.
+ */
+export const RTI_DAYS = {
+  /** Section 7(1): thirty days to reply. */
+  REPLY: 30,
+  /** Section 7(1) proviso: forty-eight hours where life or liberty is at stake. */
+  LIFE_OR_LIBERTY_HOURS: 48,
+  /** Section 19(1): thirty days to prefer a first appeal, and to decide it. */
+  APPEAL: 30,
+  /** Section 19(6): the appellate authority may take forty-five for reasons recorded. */
+  APPEAL_EXTENDED: 45,
+} as const;

@@ -1307,6 +1307,333 @@ CREATE TABLE IF NOT EXISTS project_dpr_items (
 CREATE INDEX IF NOT EXISTS idx_dpr_items_dpr ON project_dpr_items(dpr_id);
 CREATE INDEX IF NOT EXISTS idx_dpr_items_sr ON project_dpr_items(sr_item_id);
 
+-- ---------------------------------------------------------------------------
+-- 11f. LAND ACQUISITION
+-- ---------------------------------------------------------------------------
+
+-- Land taken for a work, parcel by parcel, under the Right to Fair Compensation
+-- and Transparency in Land Acquisition, Rehabilitation and Resettlement Act,
+-- 2013. The sections that matter to a division office are the preliminary
+-- notification (11), the declaration (19), the award (23) and the solatium (30),
+-- and each is a date the file cannot skip past.
+CREATE TABLE IF NOT EXISTS land_parcels (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  parcel_no             TEXT NOT NULL UNIQUE,
+  project_id            INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+  package_id            INTEGER REFERENCES packages(id) ON DELETE SET NULL,
+  division_id           INTEGER NOT NULL REFERENCES divisions(id) ON DELETE RESTRICT,
+  district_id           INTEGER REFERENCES districts(id) ON DELETE SET NULL,
+  village               TEXT NOT NULL,
+  survey_no             TEXT NOT NULL,          -- survey / hissa number in the revenue record
+  khata_no              TEXT,                   -- the E-Khata reference, once integrated
+  land_type             TEXT NOT NULL DEFAULT 'AGRICULTURAL',
+    -- AGRICULTURAL | RESIDENTIAL | COMMERCIAL | INDUSTRIAL | GOVERNMENT | FOREST
+  area_sqm              INTEGER NOT NULL DEFAULT 0,   -- x1000, as every quantity is
+  owner_name            TEXT NOT NULL,
+  owner_address         TEXT,
+  owner_contact         TEXT,
+  -- The statutory trail. A stage cannot be recorded before the one before it.
+  notification_no       TEXT,                   -- Section 11 preliminary notification
+  notification_date     TEXT,
+  declaration_no        TEXT,                   -- Section 19 declaration
+  declaration_date      TEXT,
+  award_no              TEXT,                   -- Section 23 award
+  award_date            TEXT,
+  -- Compensation, all paise. Solatium and interest are statutory additions to
+  -- the market value, so they are held apart rather than folded into one figure.
+  market_value          INTEGER NOT NULL DEFAULT 0,
+  solatium_amount       INTEGER NOT NULL DEFAULT 0,
+  interest_amount       INTEGER NOT NULL DEFAULT 0,
+  other_amount          INTEGER NOT NULL DEFAULT 0,   -- structures, trees, crops
+  total_compensation    INTEGER NOT NULL DEFAULT 0,
+  paid_amount           INTEGER NOT NULL DEFAULT 0,
+  possession_date       TEXT,
+  status                TEXT NOT NULL DEFAULT 'IDENTIFIED',
+    -- IDENTIFIED | NOTIFIED | DECLARED | AWARDED | COMPENSATED | POSSESSED
+    -- | DISPUTED | WITHDRAWN
+  remarks               TEXT,
+  document_id           INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+  workflow_instance_id  INTEGER REFERENCES workflow_instances(id) ON DELETE SET NULL,
+  created_by            INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_land_parcels_project ON land_parcels(project_id);
+CREATE INDEX IF NOT EXISTS idx_land_parcels_package ON land_parcels(package_id);
+CREATE INDEX IF NOT EXISTS idx_land_parcels_division ON land_parcels(division_id);
+CREATE INDEX IF NOT EXISTS idx_land_parcels_district ON land_parcels(district_id);
+CREATE INDEX IF NOT EXISTS idx_land_parcels_status ON land_parcels(status);
+CREATE INDEX IF NOT EXISTS idx_land_parcels_workflow ON land_parcels(workflow_instance_id);
+CREATE INDEX IF NOT EXISTS idx_land_parcels_created_by ON land_parcels(created_by);
+
+-- Compensation actually disbursed against a parcel. Paid in instalments more
+-- often than not, so the parcel carries a running total rather than a flag.
+CREATE TABLE IF NOT EXISTS land_compensation_payments (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  parcel_id      INTEGER NOT NULL REFERENCES land_parcels(id) ON DELETE CASCADE,
+  payment_date   TEXT NOT NULL,
+  amount         INTEGER NOT NULL DEFAULT 0,
+  mode           TEXT NOT NULL DEFAULT 'RTGS',   -- RTGS | CHEQUE | COURT_DEPOSIT
+  reference_no   TEXT,
+  payee_name     TEXT NOT NULL,
+  remarks        TEXT,
+  recorded_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_land_payments_parcel ON land_compensation_payments(parcel_id);
+CREATE INDEX IF NOT EXISTS idx_land_payments_user ON land_compensation_payments(recorded_by);
+
+-- ---------------------------------------------------------------------------
+-- 11g. COURT CASES
+-- ---------------------------------------------------------------------------
+
+-- Litigation the department is party to. A case usually hangs off something the
+-- department did — a work, an acquisition, a contractor — so it points at that
+-- record rather than repeating its particulars.
+CREATE TABLE IF NOT EXISTS court_cases (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  case_no            TEXT NOT NULL UNIQUE,      -- the court's own number
+  internal_ref       TEXT,                      -- the department's file number
+  court_name         TEXT NOT NULL,
+  court_type         TEXT NOT NULL DEFAULT 'HIGH_COURT',
+    -- SUPREME_COURT | HIGH_COURT | DISTRICT_COURT | TRIBUNAL | LOK_ADALAT | ARBITRATION
+  case_type          TEXT NOT NULL DEFAULT 'WRIT',
+    -- WRIT | CIVIL | ARBITRATION | CONTEMPT | LAND_ACQUISITION | SERVICE | OTHER
+  -- Which side the department is on. It changes who prepares what, so it is a
+  -- column rather than something to be inferred from the party names.
+  filed_by           TEXT NOT NULL DEFAULT 'AGAINST_DEPARTMENT',
+    -- BY_DEPARTMENT | AGAINST_DEPARTMENT
+  petitioner         TEXT NOT NULL,
+  respondent         TEXT NOT NULL,
+  subject            TEXT NOT NULL,
+  filing_date        TEXT NOT NULL,
+  division_id        INTEGER REFERENCES divisions(id) ON DELETE SET NULL,
+  project_id         INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  package_id         INTEGER REFERENCES packages(id) ON DELETE SET NULL,
+  parcel_id          INTEGER REFERENCES land_parcels(id) ON DELETE SET NULL,
+  contractor_id      INTEGER REFERENCES contractors(id) ON DELETE SET NULL,
+  claim_amount       INTEGER NOT NULL DEFAULT 0,   -- paise; what is at stake
+  decree_amount      INTEGER NOT NULL DEFAULT 0,   -- paise; what was awarded
+  advocate_name      TEXT,
+  advocate_fee       INTEGER NOT NULL DEFAULT 0,
+  dealing_officer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  next_hearing_date  TEXT,
+  status             TEXT NOT NULL DEFAULT 'FILED',
+    -- FILED | PENDING | RESERVED | DISPOSED | APPEALED | WITHDRAWN | SETTLED
+  outcome            TEXT,
+    -- IN_FAVOUR | AGAINST | PARTLY_IN_FAVOUR | SETTLED | WITHDRAWN
+  disposal_date      TEXT,
+  remarks            TEXT,
+  created_by         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_court_cases_division ON court_cases(division_id);
+CREATE INDEX IF NOT EXISTS idx_court_cases_project ON court_cases(project_id);
+CREATE INDEX IF NOT EXISTS idx_court_cases_package ON court_cases(package_id);
+CREATE INDEX IF NOT EXISTS idx_court_cases_parcel ON court_cases(parcel_id);
+CREATE INDEX IF NOT EXISTS idx_court_cases_contractor ON court_cases(contractor_id);
+CREATE INDEX IF NOT EXISTS idx_court_cases_status ON court_cases(status);
+CREATE INDEX IF NOT EXISTS idx_court_cases_hearing ON court_cases(next_hearing_date);
+CREATE INDEX IF NOT EXISTS idx_court_cases_officer ON court_cases(dealing_officer_id);
+CREATE INDEX IF NOT EXISTS idx_court_cases_created_by ON court_cases(created_by);
+
+-- Each listing, and what came of it. The next date is copied up onto the case
+-- so a cause list can be read without walking every hearing.
+CREATE TABLE IF NOT EXISTS court_hearings (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  case_id       INTEGER NOT NULL REFERENCES court_cases(id) ON DELETE CASCADE,
+  hearing_date  TEXT NOT NULL,
+  purpose       TEXT,
+  appeared_by   TEXT,                       -- the advocate or officer who appeared
+  proceedings   TEXT,                       -- what happened, in the file's words
+  order_summary TEXT,
+  next_date     TEXT,
+  document_id   INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+  recorded_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_court_hearings_case ON court_hearings(case_id, hearing_date);
+CREATE INDEX IF NOT EXISTS idx_court_hearings_document ON court_hearings(document_id);
+CREATE INDEX IF NOT EXISTS idx_court_hearings_user ON court_hearings(recorded_by);
+
+-- ---------------------------------------------------------------------------
+-- 11h. COMMITTEES AND MEETINGS
+-- ---------------------------------------------------------------------------
+
+-- Standing committees: tender, technical, purchase, grievance. Membership is by
+-- post rather than by name in a real office, but the account is what signs, so
+-- members are users and the post is recorded alongside.
+CREATE TABLE IF NOT EXISTS committees (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  code         TEXT NOT NULL UNIQUE,
+  name         TEXT NOT NULL,
+  kind         TEXT NOT NULL DEFAULT 'TENDER',
+    -- TENDER | TECHNICAL | PURCHASE | GRIEVANCE | BOARD | REVIEW | OTHER
+  purpose      TEXT,
+  division_id  INTEGER REFERENCES divisions(id) ON DELETE SET NULL,
+  -- How many members must attend for the sitting to decide anything.
+  quorum       INTEGER NOT NULL DEFAULT 3,
+  status       TEXT NOT NULL DEFAULT 'ACTIVE',
+  created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_committees_division ON committees(division_id);
+CREATE INDEX IF NOT EXISTS idx_committees_kind ON committees(kind);
+CREATE INDEX IF NOT EXISTS idx_committees_created_by ON committees(created_by);
+
+CREATE TABLE IF NOT EXISTS committee_members (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  committee_id  INTEGER NOT NULL REFERENCES committees(id) ON DELETE CASCADE,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  member_role   TEXT NOT NULL DEFAULT 'MEMBER',
+    -- CHAIRPERSON | MEMBER_SECRETARY | MEMBER | SPECIAL_INVITEE
+  designation   TEXT,                       -- the post held, as it reads on the order
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (committee_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_committee_members_committee ON committee_members(committee_id);
+CREATE INDEX IF NOT EXISTS idx_committee_members_user ON committee_members(user_id);
+
+CREATE TABLE IF NOT EXISTS meetings (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  committee_id  INTEGER NOT NULL REFERENCES committees(id) ON DELETE CASCADE,
+  meeting_no    TEXT NOT NULL,
+  title         TEXT NOT NULL,
+  scheduled_at  TEXT NOT NULL,
+  venue         TEXT,
+  mode          TEXT NOT NULL DEFAULT 'IN_PERSON',  -- IN_PERSON | VIDEO | HYBRID
+  agenda        TEXT,
+  status        TEXT NOT NULL DEFAULT 'SCHEDULED',  -- SCHEDULED | HELD | CANCELLED
+  held_at       TEXT,
+  minutes       TEXT,
+  minutes_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (committee_id, meeting_no)
+);
+CREATE INDEX IF NOT EXISTS idx_meetings_committee ON meetings(committee_id, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_meetings_status ON meetings(status);
+CREATE INDEX IF NOT EXISTS idx_meetings_minutes_by ON meetings(minutes_by);
+CREATE INDEX IF NOT EXISTS idx_meetings_created_by ON meetings(created_by);
+
+CREATE TABLE IF NOT EXISTS meeting_attendance (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  meeting_id  INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  is_present  INTEGER NOT NULL DEFAULT 0,
+  remarks     TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (meeting_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_meeting_attendance_meeting ON meeting_attendance(meeting_id);
+CREATE INDEX IF NOT EXISTS idx_meeting_attendance_user ON meeting_attendance(user_id);
+
+-- What the sitting decided, and who has to act on it. Minutes nobody is named
+-- against are minutes nobody acts on, so every decision carries an owner.
+CREATE TABLE IF NOT EXISTS meeting_decisions (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  meeting_id    INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  seq           INTEGER NOT NULL,
+  subject       TEXT NOT NULL,
+  decision      TEXT NOT NULL,
+  action_by_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  due_date      TEXT,
+  status        TEXT NOT NULL DEFAULT 'OPEN',   -- OPEN | DONE | DROPPED
+  closed_on     TEXT,
+  closing_note  TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (meeting_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_meeting_decisions_meeting ON meeting_decisions(meeting_id);
+CREATE INDEX IF NOT EXISTS idx_meeting_decisions_owner ON meeting_decisions(action_by_id, status);
+
+-- ---------------------------------------------------------------------------
+-- 11i. RIGHT TO INFORMATION
+-- ---------------------------------------------------------------------------
+
+-- Applications under the Right to Information Act, 2005.
+--
+-- The clock is the point of this module: a Public Information Officer has 30
+-- days to reply (48 hours where life or liberty is concerned), and missing it
+-- carries a personal penalty of ₹250 a day. So the due date is computed from
+-- the receipt and stored, and the register is read by how late it is.
+CREATE TABLE IF NOT EXISTS rti_requests (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_no          TEXT NOT NULL UNIQUE,
+  applicant_name      TEXT NOT NULL,
+  applicant_address   TEXT,
+  applicant_email     TEXT,
+  applicant_phone     TEXT,
+  -- An applicant below the poverty line pays no fee, which is a statutory
+  -- exemption rather than a discount, so it is recorded on the application.
+  is_bpl              INTEGER NOT NULL DEFAULT 0,
+  fee_paid            INTEGER NOT NULL DEFAULT 0,   -- paise
+  received_on         TEXT NOT NULL,
+  received_via        TEXT NOT NULL DEFAULT 'ONLINE',
+    -- ONLINE | RTI_PORTAL | POST | COUNTER | TRANSFERRED_IN
+  subject             TEXT NOT NULL,
+  information_sought  TEXT NOT NULL,
+  -- Life or liberty applications answer in 48 hours, not 30 days.
+  is_life_or_liberty  INTEGER NOT NULL DEFAULT 0,
+  division_id         INTEGER REFERENCES divisions(id) ON DELETE SET NULL,
+  pio_user_id         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  due_date            TEXT NOT NULL,
+  status              TEXT NOT NULL DEFAULT 'RECEIVED',
+    -- RECEIVED | IN_PROGRESS | TRANSFERRED | REPLIED | PARTLY_REJECTED | REJECTED | CLOSED
+  reply_date          TEXT,
+  reply_summary       TEXT,
+  -- Section 8 of the Act, where information is withheld. A rejection without
+  -- the clause it rests on is not a rejection the appellate authority can test.
+  rejection_section   TEXT,
+  rejection_ground    TEXT,
+  transferred_to      TEXT,                         -- Section 6(3) transfer
+  document_id         INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+  remarks             TEXT,
+  created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_rti_division ON rti_requests(division_id);
+CREATE INDEX IF NOT EXISTS idx_rti_pio ON rti_requests(pio_user_id);
+CREATE INDEX IF NOT EXISTS idx_rti_status ON rti_requests(status);
+CREATE INDEX IF NOT EXISTS idx_rti_due ON rti_requests(due_date);
+CREATE INDEX IF NOT EXISTS idx_rti_created_by ON rti_requests(created_by);
+
+-- First and second appeals. A first appeal goes to a departmental appellate
+-- authority within 30 days; a second appeal goes to the Information Commission.
+CREATE TABLE IF NOT EXISTS rti_appeals (
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id           INTEGER NOT NULL REFERENCES rti_requests(id) ON DELETE CASCADE,
+  appeal_no            TEXT NOT NULL UNIQUE,
+  appeal_level         TEXT NOT NULL DEFAULT 'FIRST',   -- FIRST | SECOND
+  filed_on             TEXT NOT NULL,
+  grounds              TEXT NOT NULL,
+  appellate_authority  TEXT,
+  authority_user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  due_date             TEXT NOT NULL,
+  status               TEXT NOT NULL DEFAULT 'FILED',
+    -- FILED | HEARD | ALLOWED | REJECTED | REMANDED | WITHDRAWN
+  decided_on           TEXT,
+  decision             TEXT,
+  penalty_imposed      INTEGER NOT NULL DEFAULT 0,      -- paise, under Section 20
+  remarks              TEXT,
+  created_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_rti_appeals_request ON rti_appeals(request_id);
+CREATE INDEX IF NOT EXISTS idx_rti_appeals_status ON rti_appeals(status);
+CREATE INDEX IF NOT EXISTS idx_rti_appeals_authority ON rti_appeals(authority_user_id);
+CREATE INDEX IF NOT EXISTS idx_rti_appeals_created_by ON rti_appeals(created_by);
+
 -- Named counters backing project/package/tender/bill code generation.
 CREATE TABLE IF NOT EXISTS sequences (
   key         TEXT PRIMARY KEY,

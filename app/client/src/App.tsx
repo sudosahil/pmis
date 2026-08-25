@@ -39,6 +39,10 @@ import { ProfilePage } from './pages/ProfilePage';
 import { SearchPage } from './pages/SearchPage';
 import { RoleAccessPage } from './pages/RoleAccessPage';
 import { ReportsPage } from './pages/ReportsPage';
+import { LandAcquisitionPage } from './pages/LandAcquisitionPage';
+import { CourtCasesPage } from './pages/CourtCasesPage';
+import { CommitteesPage } from './pages/CommitteesPage';
+import { RtiPage } from './pages/RtiPage';
 
 /** Sends anyone without a session to the sign-in screen, remembering where they were headed. */
 function RequireAuth() {
@@ -238,6 +242,22 @@ export function App() {
         <Route element={<RequirePermission permission="funds.view" />}>
           <Route path="/funds" element={<FundsPage />} />
           <Route path="/funds/loc/:id" element={<LocRequestDetailPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission="land.view" />}>
+          <Route path="/land" element={<LandAcquisitionPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission="court.view" />}>
+          <Route path="/court-cases" element={<CourtCasesPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission="committees.view" />}>
+          <Route path="/committees" element={<CommitteesPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission="rti.view" />}>
+          <Route path="/rti" element={<RtiPage />} />
         </Route>
 
         <Route element={<RequirePermission permission="reports.view" />}>

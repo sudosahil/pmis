@@ -206,6 +206,22 @@ function seedWorkflows(): void {
       { code: 'MD_APPROVE', name: 'Approval (MD)', role: ROLES.MD, scope: 'GLOBAL', slaDays: 5 },
     ],
   );
+
+  // An award binds the department to pay a stated sum for land it does not yet
+  // hold, so it is checked in the division, reviewed in the circle and sanctioned
+  // by the accounts cadre before a paisa of compensation moves.
+  seedWorkflow(
+    WORKFLOWS.LAND_ACQUISITION,
+    'Land Acquisition Award',
+    ENTITY_TYPES.LAND_PARCEL,
+    'Approval of the compensation award passed under Section 23 of the 2013 Act, '
+      + 'before compensation is disbursed and possession taken.',
+    [
+      { code: 'EE_VERIFY', name: 'Divisional Verification (EE)', role: ROLES.EE, scope: 'DIVISION', slaDays: 5 },
+      { code: 'SE_REVIEW', name: 'Circle Review (SE)', role: ROLES.SE, scope: 'CIRCLE', slaDays: 5 },
+      { code: 'CAO_SANCTION', name: 'Compensation Sanction (CAO)', role: ROLES.CAO, scope: 'GLOBAL', slaDays: 7 },
+    ],
+  );
 }
 
 // --- 3. Masters ------------------------------------------------------------
@@ -1142,6 +1158,7 @@ function seedDemoRecords(ids: Ids, userIds: Ids, contractorIds: Ids): void {
   seedTenders(ids, userIds, contractorIds, projectIds, { pkgRoad2Id, pkgBldgId }, srIds, dprIds);
   seedBills(ids, userIds, contractorIds, projectIds, { pkgRoadId, pkgWaterId });
   seedFunds(ids, userIds, projectIds);
+  seedCasework(ids, userIds, contractorIds, projectIds);
   seedApprovalFlows(userIds, contractorIds);
   ageWorkflowInstances();
 }
@@ -1198,6 +1215,677 @@ function ageWorkflowInstances(): void {
       setAction.run(new Date(at).toISOString().replace('T', ' ').slice(0, 19), action.id);
     });
   }
+}
+
+/**
+ * The department's own casework: land being acquired for the ring road, the
+ * litigation that acquisition attracted, the committees that sit on tenders and
+ * grievances, and the information the public has asked for.
+ *
+ * All four are register modules, and a register nobody has written in reads as
+ * a broken screen rather than an empty one — so each carries enough to show what
+ * it is for, including the awkward cases: a parcel stuck in court, a sitting held
+ * short of quorum, and an RTI application already past its statutory date.
+ */
+function seedCasework(ids: Ids, userIds: Ids, contractorIds: Ids, projectIds: Ids): void {
+  const db = getDb();
+  const already = db.prepare(`SELECT COUNT(*) AS n FROM land_parcels`).get() as { n: number };
+  if (already.n > 0) return;
+
+  /** A date this many days before today, as YYYY-MM-DD. */
+  const daysAgo = (days: number): string =>
+    new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+  const daysAhead = (days: number): string => daysAgo(-days);
+
+  // --- Land acquisition ------------------------------------------------------
+
+  const insertParcel = db.prepare(
+    `INSERT INTO land_parcels
+       (parcel_no, project_id, division_id, district_id, village, survey_no, khata_no,
+        land_type, area_sqm, owner_name, owner_address, owner_contact,
+        notification_no, notification_date, declaration_no, declaration_date,
+        award_no, award_date, market_value, solatium_amount, interest_amount, other_amount,
+        total_compensation, paid_amount, possession_date, status, remarks, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const insertLandPayment = db.prepare(
+    `INSERT INTO land_compensation_payments
+       (parcel_id, payment_date, amount, mode, reference_no, payee_name, remarks, recorded_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  interface ParcelSpec {
+    survey: string;
+    khata: string;
+    village: string;
+    landType: string;
+    /** Square metres. */
+    area: number;
+    owner: string;
+    contact: string;
+    /** Market value in rupees; solatium is the statutory hundred per cent. */
+    market: number;
+    other: number;
+    interest: number;
+    status: string;
+    /** How many days ago each statutory stage was recorded, where reached. */
+    notifiedDaysAgo?: number;
+    declaredDaysAgo?: number;
+    awardedDaysAgo?: number;
+    possessedDaysAgo?: number;
+    /** Instalments of compensation actually paid, in rupees. */
+    payments?: [number, number][];   // [rupees, days ago]
+    remarks?: string;
+  }
+
+  const parcels: ParcelSpec[] = [
+    {
+      survey: '114/2', khata: 'KH-114-2-BSV', village: 'Basavanahalli', landType: 'AGRICULTURAL',
+      area: 4_860, owner: 'Shri Ramachandra Gowda', contact: '+91 98450 11223',
+      market: 3_402_000, other: 186_000, interest: 0, status: 'POSSESSED',
+      notifiedDaysAgo: 320, declaredDaysAgo: 250, awardedDaysAgo: 180, possessedDaysAgo: 120,
+      payments: [[4_000_000, 160], [2_990_000, 130]],
+      remarks: 'Possession taken after the award was satisfied in full. Boundary handed over to the contractor.',
+    },
+    {
+      survey: '118/1', khata: 'KH-118-1-BSV', village: 'Basavanahalli', landType: 'AGRICULTURAL',
+      area: 2_240, owner: 'Smt. Lakshmamma', contact: '+91 99862 33447',
+      market: 1_568_000, other: 94_000, interest: 21_000, status: 'COMPENSATED',
+      notifiedDaysAgo: 320, declaredDaysAgo: 250, awardedDaysAgo: 175,
+      payments: [[3_251_000, 90]],
+      remarks: 'Compensation paid in one instalment. Possession to be taken after the standing crop is harvested.',
+    },
+    {
+      survey: '9/3B', khata: 'KH-9-3B-KDL', village: 'Kadlapura', landType: 'RESIDENTIAL',
+      area: 610, owner: 'Shri Imran Pasha', contact: '+91 90084 55219',
+      market: 4_270_000, other: 812_000, interest: 0, status: 'DISPUTED',
+      notifiedDaysAgo: 320, declaredDaysAgo: 250, awardedDaysAgo: 168,
+      remarks: 'Owner has moved the High Court disputing the market value adopted. Compensation withheld pending orders.',
+    },
+    {
+      survey: '47/1', khata: 'KH-47-1-KDL', village: 'Kadlapura', landType: 'COMMERCIAL',
+      area: 380, owner: 'M/s Kadlapura Traders', contact: '+91 80 2233 8890',
+      market: 5_320_000, other: 1_240_000, interest: 0, status: 'AWARDED',
+      notifiedDaysAgo: 300, declaredDaysAgo: 220, awardedDaysAgo: 40,
+      remarks: 'Award passed. Compensation awaiting sanction before disbursement.',
+    },
+    {
+      survey: '203/4', khata: 'KH-203-4-HLG', village: 'Halage', landType: 'AGRICULTURAL',
+      area: 7_120, owner: 'Shri Basavaraj Patil', contact: '+91 94488 77120',
+      market: 4_272_000, other: 0, interest: 0, status: 'DECLARED',
+      notifiedDaysAgo: 210, declaredDaysAgo: 95,
+      remarks: 'Declaration published. Award enquiry under Section 21 in progress.',
+    },
+    {
+      survey: '203/6', khata: 'KH-203-6-HLG', village: 'Halage', landType: 'AGRICULTURAL',
+      area: 3_450, owner: 'Shri Mallikarjuna Swamy', contact: '+91 97400 21188',
+      market: 2_070_000, other: 0, interest: 0, status: 'NOTIFIED',
+      notifiedDaysAgo: 210,
+      remarks: 'Objections under Section 15 received and being heard.',
+    },
+    {
+      survey: '77/2', khata: 'KH-77-2-HLG', village: 'Halage', landType: 'GOVERNMENT',
+      area: 1_980, owner: 'Revenue Department, Government of Karnataka', contact: '—',
+      market: 0, other: 0, interest: 0, status: 'IDENTIFIED',
+      remarks: 'Government land. Transfer being sought by administrative order rather than acquisition.',
+    },
+  ];
+
+  const parcelIds: Record<string, number> = {};
+
+  parcels.forEach((spec, index) => {
+    // Section 30(1): solatium is one hundred per cent of the market value.
+    const market = toPaise(spec.market);
+    const solatium = market;
+    const other = toPaise(spec.other);
+    const interest = toPaise(spec.interest);
+    const total = market + solatium + other + interest;
+
+    const parcelNo = `DIV-NGR/LA/2026-27/${String(index + 1).padStart(4, '0')}`;
+    const id = Number(
+      insertParcel.run(
+        parcelNo, projectIds.projRoad!, ids.divNgr!, ids.distKlb!,
+        spec.village, spec.survey, spec.khata, spec.landType, Math.round(spec.area * 1000),
+        spec.owner, `${spec.village} village, Kalburgi taluk`, spec.contact,
+        spec.notifiedDaysAgo ? `PWD/LA/S11/2025/${100 + index}` : null,
+        spec.notifiedDaysAgo ? daysAgo(spec.notifiedDaysAgo) : null,
+        spec.declaredDaysAgo ? `PWD/LA/S19/2025/${200 + index}` : null,
+        spec.declaredDaysAgo ? daysAgo(spec.declaredDaysAgo) : null,
+        spec.awardedDaysAgo ? `PWD/LA/S23/2026/${300 + index}` : null,
+        spec.awardedDaysAgo ? daysAgo(spec.awardedDaysAgo) : null,
+        market, solatium, interest, other, total,
+        0, spec.possessedDaysAgo ? daysAgo(spec.possessedDaysAgo) : null,
+        spec.status, spec.remarks ?? null, userIds['ae.reddy']!,
+      ).lastInsertRowid,
+    );
+    parcelIds[spec.survey] = id;
+
+    let paid = 0;
+    for (const [rupees, ago] of spec.payments ?? []) {
+      const amount = toPaise(rupees);
+      paid += amount;
+      insertLandPayment.run(
+        id, daysAgo(ago), amount, 'RTGS',
+        `RTGS/LA/${daysAgo(ago).replace(/-/g, '')}/${index + 1}`,
+        spec.owner, 'Compensation disbursed against the award.', userIds['aao.menon']!,
+      );
+    }
+    if (paid > 0) db.prepare(`UPDATE land_parcels SET paid_amount = ? WHERE id = ?`).run(paid, id);
+  });
+
+  // --- Court cases -----------------------------------------------------------
+
+  const insertCase = db.prepare(
+    `INSERT INTO court_cases
+       (case_no, internal_ref, court_name, court_type, case_type, filed_by, petitioner, respondent,
+        subject, filing_date, division_id, project_id, parcel_id, contractor_id, claim_amount,
+        decree_amount, advocate_name, advocate_fee, dealing_officer_id, next_hearing_date,
+        status, outcome, disposal_date, remarks, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const insertHearing = db.prepare(
+    `INSERT INTO court_hearings
+       (case_id, hearing_date, purpose, appeared_by, proceedings, order_summary, next_date, recorded_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  interface CaseSpec {
+    caseNo: string;
+    court: string;
+    courtType: string;
+    caseType: string;
+    filedBy: string;
+    petitioner: string;
+    respondent: string;
+    subject: string;
+    filedDaysAgo: number;
+    parcelSurvey?: string;
+    contractorCode?: string;
+    claim: number;
+    advocate: string;
+    status: string;
+    outcome?: string;
+    decree?: number;
+    disposedDaysAgo?: number;
+    nextHearingInDays?: number;
+    remarks?: string;
+    /** [days ago, purpose, proceedings, next date in days from that hearing] */
+    hearings: [number, string, string, number | null][];
+  }
+
+  const cases: CaseSpec[] = [
+    {
+      caseNo: 'WP 41822/2026', court: 'High Court of Karnataka, Kalaburagi Bench',
+      courtType: 'HIGH_COURT', caseType: 'LAND_ACQUISITION', filedBy: 'AGAINST_DEPARTMENT',
+      petitioner: 'Shri Imran Pasha',
+      respondent: 'State of Karnataka & Others',
+      subject:
+        'Writ petition challenging the market value adopted in the award under Section 23 for '
+        + 'survey number 9/3B of Kadlapura, and seeking enhanced compensation.',
+      filedDaysAgo: 150, parcelSurvey: '9/3B', claim: 12_400_000,
+      advocate: 'Shri K. Venkatesh, Government Pleader',
+      status: 'PENDING', nextHearingInDays: 9,
+      remarks: 'Statement of objections filed. Valuation report of the Sub-Registrar produced.',
+      hearings: [
+        [140, 'Admission', 'Notice ordered to the respondents. No interim stay granted on the acquisition.', 100],
+        [100, 'Objections', 'Statement of objections filed on behalf of the department and taken on record.', 55],
+        [55, 'Arguments', 'Part heard. The court called for the Sub-Registrar valuation for the relevant period.', 9],
+      ],
+    },
+    {
+      caseNo: 'ARB 17/2026', court: 'Sole Arbitrator, Bengaluru',
+      courtType: 'ARBITRATION', caseType: 'ARBITRATION', filedBy: 'AGAINST_DEPARTMENT',
+      petitioner: 'Ganga Builders & Developers',
+      respondent: 'Executive Engineer, North Gandhinagar Division',
+      subject:
+        'Claim for idling charges and price escalation on the water supply distribution package, '
+        + 'arising from delayed handover of the pipeline corridor.',
+      filedDaysAgo: 95, contractorCode: 'C-10003', claim: 8_640_000,
+      advocate: 'M/s Rao & Associates',
+      status: 'PENDING', nextHearingInDays: 23,
+      remarks: 'Claim statement and counter-statement exchanged. Departmental records summoned.',
+      hearings: [
+        [88, 'Preliminary meeting', 'Terms of reference settled. Schedule of pleadings fixed by consent.', 45],
+        [45, 'Pleadings', 'Claim statement filed by the claimant; time granted to the department to reply.', 23],
+      ],
+    },
+    {
+      caseNo: 'OS 288/2025', court: 'Principal Civil Judge, Kalaburagi',
+      courtType: 'DISTRICT_COURT', caseType: 'CIVIL', filedBy: 'BY_DEPARTMENT',
+      petitioner: 'Executive Engineer, North Gandhinagar Division',
+      respondent: 'M/s Vishwa Infra Projects',
+      subject:
+        'Suit for recovery of mobilisation advance and liquidated damages on a rescinded contract, '
+        + 'with interest from the date of rescission.',
+      filedDaysAgo: 400, contractorCode: 'C-10002', claim: 5_180_000,
+      advocate: 'Shri K. Venkatesh, Government Pleader',
+      status: 'DISPOSED', outcome: 'PARTLY_IN_FAVOUR', decree: 3_920_000, disposedDaysAgo: 60,
+      remarks: 'Decreed in part. Recovery of the advance allowed with interest; liquidated damages scaled down.',
+      hearings: [
+        [380, 'Summons', 'Summons served on the defendant. Written statement called for.', 300],
+        [300, 'Written statement', 'Written statement filed. Issues framed by the court.', 180],
+        [180, 'Evidence', 'Departmental witness examined and cross-examined. Documents exhibited.', 90],
+        [90, 'Arguments', 'Arguments heard on both sides. Judgment reserved.', 60],
+        [60, 'Judgment', 'Suit decreed in part. Recovery of ₹39.20 lakh allowed with interest at 6 per cent.', null],
+      ],
+    },
+    {
+      caseNo: 'WP 9014/2026', court: 'High Court of Karnataka, Kalaburagi Bench',
+      courtType: 'HIGH_COURT', caseType: 'WRIT', filedBy: 'AGAINST_DEPARTMENT',
+      petitioner: 'Kalaburagi Citizens Welfare Forum',
+      respondent: 'State of Karnataka & Others',
+      subject:
+        'Public interest petition seeking restoration of storm water drains disturbed during the '
+        + 'ring road widening, and a direction to complete the reach before the monsoon.',
+      filedDaysAgo: 62, claim: 0,
+      advocate: 'Shri K. Venkatesh, Government Pleader',
+      status: 'PENDING', nextHearingInDays: 2,
+      remarks: 'Compliance affidavit on the drainage restoration to be filed before the next date.',
+      hearings: [
+        [55, 'Admission', 'Notice ordered. The department directed to file a compliance affidavit.', 2],
+      ],
+    },
+  ];
+
+  for (const spec of cases) {
+    const caseId = Number(
+      insertCase.run(
+        spec.caseNo, `PWD/NGR/LEGAL/${spec.caseNo.replace(/[^0-9]/g, '').slice(0, 6)}`,
+        spec.court, spec.courtType, spec.caseType, spec.filedBy,
+        spec.petitioner, spec.respondent, spec.subject, daysAgo(spec.filedDaysAgo),
+        ids.divNgr!, projectIds.projRoad!,
+        spec.parcelSurvey ? parcelIds[spec.parcelSurvey]! : null,
+        spec.contractorCode ? contractorIds[spec.contractorCode]! : null,
+        toPaise(spec.claim), toPaise(spec.decree ?? 0),
+        spec.advocate, toPaise(spec.claim > 0 ? Math.round(spec.claim * 0.02) : 25_000),
+        userIds['ee.kumar']!,
+        spec.nextHearingInDays !== undefined ? daysAhead(spec.nextHearingInDays) : null,
+        spec.status, spec.outcome ?? null,
+        spec.disposedDaysAgo ? daysAgo(spec.disposedDaysAgo) : null,
+        spec.remarks ?? null, userIds['ee.kumar']!,
+      ).lastInsertRowid,
+    );
+
+    for (const [ago, purpose, proceedings, nextIn] of spec.hearings) {
+      insertHearing.run(
+        caseId, daysAgo(ago), purpose, spec.advocate, proceedings, proceedings,
+        nextIn === null ? null : daysAgo(ago - nextIn), userIds['ee.kumar']!,
+      );
+    }
+  }
+
+  // --- Committees and meetings -----------------------------------------------
+
+  const insertCommittee = db.prepare(
+    `INSERT INTO committees (code, name, kind, purpose, division_id, quorum, status, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?)`,
+  );
+  const insertMember = db.prepare(
+    `INSERT INTO committee_members (committee_id, user_id, member_role, designation)
+     VALUES (?, ?, ?, ?)`,
+  );
+  const insertMeeting = db.prepare(
+    `INSERT INTO meetings
+       (committee_id, meeting_no, title, scheduled_at, venue, mode, agenda, status,
+        held_at, minutes, minutes_by, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const insertAttendance = db.prepare(
+    `INSERT INTO meeting_attendance (meeting_id, user_id, is_present, remarks) VALUES (?, ?, ?, ?)`,
+  );
+  const insertDecision = db.prepare(
+    `INSERT INTO meeting_decisions
+       (meeting_id, seq, subject, decision, action_by_id, due_date, status, closed_on, closing_note)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  interface CommitteeSpec {
+    code: string;
+    name: string;
+    kind: string;
+    purpose: string;
+    divisional: boolean;
+    quorum: number;
+    members: [string, string, string][];   // username, role in committee, designation
+  }
+
+  const committees: CommitteeSpec[] = [
+    {
+      code: 'DTC-NGR', name: 'Divisional Tender Committee, North Gandhinagar',
+      kind: 'TENDER', quorum: 3, divisional: true,
+      purpose:
+        'Scrutiny of tender notices and bid conditions, and recommendation on the technical '
+        + 'evaluation of bids received in the division.',
+      members: [
+        ['se.iyer', 'CHAIRPERSON', 'Superintending Engineer, Civil Circle'],
+        ['ee.kumar', 'MEMBER_SECRETARY', 'Executive Engineer, North Gandhinagar Division'],
+        ['cao.desai', 'MEMBER', 'Chief Accounts Officer'],
+        ['aee.singh', 'MEMBER', 'Assistant Executive Engineer'],
+      ],
+    },
+    {
+      code: 'TSC-HO', name: 'Technical Sanction Committee',
+      kind: 'TECHNICAL', quorum: 3, divisional: false,
+      purpose:
+        'Technical vetting of detailed project reports and estimates above the delegated '
+        + 'financial powers of the circle.',
+      members: [
+        ['ce.sharma', 'CHAIRPERSON', 'Chief Engineer'],
+        ['se.iyer', 'MEMBER_SECRETARY', 'Superintending Engineer, Civil Circle'],
+        ['ee.kumar', 'MEMBER', 'Executive Engineer, North Gandhinagar Division'],
+        ['cao.desai', 'MEMBER', 'Chief Accounts Officer'],
+      ],
+    },
+    {
+      code: 'GRC-HO', name: 'Grievance Redressal Committee',
+      kind: 'GRIEVANCE', quorum: 2, divisional: false,
+      purpose:
+        'Hearing of grievances from contractors, land losers and the public, and disposal of '
+        + 'first appeals under the Right to Information Act.',
+      members: [
+        ['md.rao', 'CHAIRPERSON', 'Managing Director'],
+        ['ce.sharma', 'MEMBER_SECRETARY', 'Chief Engineer'],
+        ['auditor.bose', 'SPECIAL_INVITEE', 'Auditor'],
+      ],
+    },
+  ];
+
+  const committeeIds: Record<string, number> = {};
+  for (const spec of committees) {
+    const id = Number(
+      insertCommittee.run(
+        spec.code, spec.name, spec.kind, spec.purpose,
+        spec.divisional ? ids.divNgr! : null, spec.quorum, userIds.admin!,
+      ).lastInsertRowid,
+    );
+    committeeIds[spec.code] = id;
+    for (const [username, memberRole, designation] of spec.members) {
+      insertMember.run(id, userIds[username]!, memberRole, designation);
+    }
+  }
+
+  interface MeetingSpec {
+    committee: string;
+    no: string;
+    title: string;
+    daysAgo: number;
+    venue: string;
+    status: string;
+    agenda: string;
+    minutes?: string;
+    /** username -> attended. Anyone omitted was invited and did not attend. */
+    present?: string[];
+    decisions?: [string, string, string, number, string][];
+      // subject, decision, owner username, due in days from the sitting, status
+  }
+
+  const meetings: MeetingSpec[] = [
+    {
+      committee: 'DTC-NGR', no: 'DTC-NGR/2026-27/001',
+      title: 'Technical evaluation of bids — divisional office building, Gandhinagar',
+      daysAgo: 34, venue: 'Divisional Office, North Gandhinagar', status: 'HELD',
+      agenda:
+        '1. Confirmation of the minutes of the previous sitting.\n'
+        + '2. Technical evaluation of the three bids received against DIV-SGR/TEN/2026-27/0001.\n'
+        + '3. Recommendation on opening the financial envelopes.',
+      minutes:
+        'The committee took up the technical evaluation of the three bids received. Each bid was '
+        + 'marked against the published technical criteria and the marks recorded on the evaluation '
+        + 'sheet. All three bidders were found to satisfy every pre-qualification criterion. The '
+        + 'committee recommended that the financial envelopes be opened.',
+      present: ['se.iyer', 'ee.kumar', 'cao.desai', 'aee.singh'],
+      decisions: [
+        [
+          'Technical evaluation of the three bids',
+          'All three bids found technically qualified. Marks as recorded on the evaluation sheet '
+          + 'annexed to these minutes.',
+          'ee.kumar', 7, 'DONE',
+        ],
+        [
+          'Opening of financial envelopes',
+          'Recommended that the financial envelopes be opened on the notified date and the bids '
+          + 'ranked L1 to L3.',
+          'ee.kumar', 10, 'DONE',
+        ],
+      ],
+    },
+    {
+      committee: 'TSC-HO', no: 'TSC-HO/2026-27/002',
+      title: 'Technical sanction — ring road widening, chainage 6.200 to 12.400 km',
+      daysAgo: 21, venue: 'Head Office Conference Room', status: 'HELD',
+      agenda:
+        '1. Detailed project report DPR/NGR/2026/011 and its estimate.\n'
+        + '2. Relief from the Schedule of Rates ceiling on account of bitumen escalation.\n'
+        + '3. Any other item with the permission of the chair.',
+      minutes:
+        'The committee examined the estimate priced against the 2024-25 Schedule of Rates and '
+        + 'noted that bitumen and steel rates have moved materially since that edition was fixed. '
+        + 'It recorded that inviting bids at the schedule would draw no response, and recommended '
+        + 'relief of eight per cent under the escalation order already in force. The estimate was '
+        + 'otherwise found in order.',
+      present: ['ce.sharma', 'se.iyer', 'ee.kumar', 'cao.desai'],
+      decisions: [
+        [
+          'Estimate of ₹7.23 crore for the balance reach',
+          'Estimate found in order and recommended for technical sanction as priced.',
+          'se.iyer', 5, 'DONE',
+        ],
+        [
+          'Relief from the Schedule of Rates ceiling',
+          'Relief of eight per cent recommended on the ground of bitumen and steel escalation, '
+          + 'under order PWD/SR/2026/ESC-03.',
+          'ce.sharma', 7, 'DONE',
+        ],
+        [
+          'Revision of the Schedule of Rates for bituminous items',
+          'The rate book to be re-examined for the whole bituminous chapter before the next '
+          + 'tendering season, rather than relief being granted tender by tender.',
+          'ce.sharma', 90, 'OPEN',
+        ],
+      ],
+    },
+    {
+      committee: 'GRC-HO', no: 'GRC-HO/2026-27/001',
+      title: 'Grievances of land losers, Basavanahalli and Kadlapura',
+      daysAgo: 12, venue: 'Head Office Conference Room', status: 'HELD',
+      agenda:
+        '1. Representation of the land losers of Kadlapura on the market value adopted.\n'
+        + '2. Delay in disbursement of compensation for survey number 118/1.',
+      minutes:
+        'Only the chairperson and the special invitee were present; the member secretary was on '
+        + 'tour. The committee heard the representations but, being short of its quorum, recorded '
+        + 'no decision and adjourned the sitting to a date to be fixed.',
+      present: ['md.rao', 'auditor.bose'],
+    },
+    {
+      committee: 'DTC-NGR', no: 'DTC-NGR/2026-27/002',
+      title: 'Bid conditions — ring road widening, balance reach',
+      daysAgo: -8, venue: 'Divisional Office, North Gandhinagar', status: 'SCHEDULED',
+      agenda:
+        '1. Pre-qualification and technical criteria for DIV-NGR/TEN/2026-27/0001.\n'
+        + '2. Bid validity and earnest money.\n'
+        + '3. Pre-bid queries received from intending bidders.',
+    },
+  ];
+
+  for (const spec of meetings) {
+    const committeeId = committeeIds[spec.committee]!;
+    const scheduled = `${daysAgo(spec.daysAgo)} 11:00`;
+    const meetingId = Number(
+      insertMeeting.run(
+        committeeId, spec.no, spec.title, scheduled, spec.venue, 'IN_PERSON', spec.agenda,
+        spec.status, spec.status === 'HELD' ? scheduled : null, spec.minutes ?? null,
+        spec.status === 'HELD' ? userIds['ee.kumar']! : null, userIds['ee.kumar']!,
+      ).lastInsertRowid,
+    );
+
+    const roll = committees.find((c) => c.code === spec.committee)!.members;
+    for (const [username] of roll) {
+      const present = spec.present?.includes(username) ? 1 : 0;
+      insertAttendance.run(
+        meetingId, userIds[username]!, present,
+        spec.status === 'HELD' && !present ? 'On tour.' : null,
+      );
+    }
+
+    (spec.decisions ?? []).forEach(([subject, decision, owner, dueIn, status], index) => {
+      insertDecision.run(
+        meetingId, index + 1, subject, decision, userIds[owner]!,
+        daysAgo(spec.daysAgo - dueIn), status,
+        status === 'DONE' ? daysAgo(Math.max(spec.daysAgo - dueIn - 2, 0)) : null,
+        status === 'DONE' ? 'Complied with and reported to the committee.' : null,
+      );
+    });
+  }
+
+  // --- Right to Information --------------------------------------------------
+
+  const insertRti = db.prepare(
+    `INSERT INTO rti_requests
+       (request_no, applicant_name, applicant_address, applicant_email, applicant_phone,
+        is_bpl, fee_paid, received_on, received_via, subject, information_sought,
+        is_life_or_liberty, division_id, pio_user_id, due_date, status, reply_date,
+        reply_summary, rejection_section, rejection_ground, remarks, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const insertAppeal = db.prepare(
+    `INSERT INTO rti_appeals
+       (request_id, appeal_no, appeal_level, filed_on, grounds, appellate_authority,
+        authority_user_id, due_date, status, decided_on, decision, penalty_imposed, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  interface RtiSpec {
+    applicant: string;
+    address: string;
+    email: string;
+    isBpl: boolean;
+    receivedDaysAgo: number;
+    via: string;
+    subject: string;
+    sought: string;
+    status: string;
+    repliedDaysAgo?: number;
+    replySummary?: string;
+    rejectionSection?: string;
+    rejectionGround?: string;
+    /** [level, days ago filed, status, decision, penalty in rupees] */
+    appeal?: [string, number, string, string, number];
+  }
+
+  const rtis: RtiSpec[] = [
+    {
+      applicant: 'Shri Prakash Kulkarni',
+      address: 'Station Road, Kalaburagi', email: 'prakash.kulkarni@example.com', isBpl: false,
+      receivedDaysAgo: 58, via: 'RTI_PORTAL',
+      subject: 'Expenditure on the ring road widening, phase II',
+      sought:
+        'Certified copies of all running account bills paid to the contractor on package 01 of '
+        + 'the ring road widening, together with the measurement book entries against each.',
+      status: 'REPLIED', repliedDaysAgo: 34,
+      replySummary:
+        'Certified copies of three running account bills supplied on payment of copying charges. '
+        + 'Measurement book entries supplied for the corresponding periods.',
+    },
+    {
+      applicant: 'Smt. Sunanda Deshpande',
+      address: 'Basavanahalli village, Kalburgi taluk', email: 'sunanda.d@example.com', isBpl: true,
+      receivedDaysAgo: 44, via: 'COUNTER',
+      subject: 'Basis of the market value adopted for land acquisition at Basavanahalli',
+      sought:
+        'The valuation report and the Sub-Registrar guidance values relied on in fixing the '
+        + 'market value in the awards passed for survey numbers 114/2 and 118/1.',
+      status: 'PARTLY_REJECTED', repliedDaysAgo: 20,
+      replySummary:
+        'Valuation report and guidance values supplied. The names, holdings and bank particulars '
+        + 'of the other land losers were withheld.',
+      rejectionSection: '8(1)(j)',
+      rejectionGround:
+        'The particulars of other land losers are personal information with no bearing on any '
+        + 'public activity, and disclosing them would be an unwarranted invasion of their privacy.',
+    },
+    {
+      applicant: 'Shri Mohan Rao',
+      address: 'Jayanagar, Bengaluru', email: 'mohan.rao@example.com', isBpl: false,
+      receivedDaysAgo: 41, via: 'POST',
+      subject: 'Technical evaluation of bids for the divisional office building',
+      sought:
+        'The marks awarded to each bidder against each technical criterion, and the minutes of '
+        + 'the tender committee that evaluated the bids.',
+      status: 'IN_PROGRESS',
+      // Past its thirty days: this is the one an officer is asked about.
+    },
+    {
+      applicant: 'Kalaburagi Citizens Welfare Forum',
+      address: 'Court Circle, Kalaburagi', email: 'forum@example.com', isBpl: false,
+      receivedDaysAgo: 16, via: 'ONLINE',
+      subject: 'Storm water drain restoration along the ring road',
+      sought:
+        'The schedule for restoring the storm water drains disturbed during the widening, and the '
+        + 'inspection notes of the Assistant Engineer for the last six months.',
+      status: 'IN_PROGRESS',
+    },
+    {
+      applicant: 'Shri Nagesh Bhat',
+      address: 'Halage village, Kalburgi taluk', email: 'nagesh.bhat@example.com', isBpl: false,
+      receivedDaysAgo: 4, via: 'RTI_PORTAL',
+      subject: 'Status of the declaration under Section 19 for Halage village',
+      sought:
+        'The date of publication of the declaration under Section 19 for survey numbers 203/4 and '
+        + '203/6, and the schedule for the award enquiry under Section 21.',
+      status: 'RECEIVED',
+    },
+    {
+      applicant: 'Shri Iqbal Ahmed',
+      address: 'Kadlapura, Kalburgi taluk', email: 'iqbal.ahmed@example.com', isBpl: false,
+      receivedDaysAgo: 120, via: 'POST',
+      subject: 'File notings on the rescission of the contract with Vishwa Infra Projects',
+      sought: 'All file notings and correspondence leading to the rescission of the contract.',
+      status: 'REJECTED', repliedDaysAgo: 96,
+      replySummary: 'Refused. The matter is sub judice in OS 288/2025 before the Civil Judge, Kalaburagi.',
+      rejectionSection: '8(1)(b)',
+      rejectionGround:
+        'The information sought relates to a matter pending before a competent court, and its '
+        + 'disclosure has been expressly forbidden pending disposal.',
+      appeal: [
+        'FIRST', 80, 'REJECTED',
+        'The first appellate authority upheld the refusal, holding that the record sought is '
+        + 'directly in issue in the pending suit. The appellant was advised to seek the record '
+        + 'through the court.',
+        0,
+      ],
+    },
+  ];
+
+  rtis.forEach((spec, index) => {
+    const received = daysAgo(spec.receivedDaysAgo);
+    // Section 7(1): thirty days from receipt.
+    const due = daysAgo(spec.receivedDaysAgo - 30);
+    const requestId = Number(
+      insertRti.run(
+        `DIV-NGR/RTI/2026-27/${String(index + 1).padStart(4, '0')}`,
+        spec.applicant, spec.address, spec.email, '+91 98800 00000',
+        spec.isBpl ? 1 : 0, spec.isBpl ? 0 : toPaise(10),
+        received, spec.via, spec.subject, spec.sought, 0,
+        ids.divNgr!, userIds['aee.singh']!, due, spec.status,
+        spec.repliedDaysAgo ? daysAgo(spec.repliedDaysAgo) : null,
+        spec.replySummary ?? null, spec.rejectionSection ?? null, spec.rejectionGround ?? null,
+        null, userIds['ac.nair']!,
+      ).lastInsertRowid,
+    );
+
+    if (spec.appeal) {
+      const [level, filedAgo, status, decision, penalty] = spec.appeal;
+      insertAppeal.run(
+        requestId, `DIV-NGR/RTI/2026-27/${String(index + 1).padStart(4, '0')}/AP1-01`,
+        level, daysAgo(filedAgo), 'The refusal is not sustainable and the record is severable.',
+        'Chief Engineer, First Appellate Authority', userIds['ce.sharma']!,
+        daysAgo(filedAgo - 30), status, daysAgo(filedAgo - 26), decision, toPaise(penalty),
+        userIds['ac.nair']!,
+      );
+      db.prepare(`UPDATE rti_requests SET status = 'CLOSED' WHERE id = ?`).run(requestId);
+    }
+  });
 }
 
 /**
@@ -1940,6 +2628,32 @@ function primeSequences(): void {
        FROM fund_releases f JOIN schemes s ON s.id = f.scheme_id`,
   )) {
     set(`FUND_RELEASE:${row.scheme}:${row.fy}`, tail(row.code!));
+  }
+
+  // Land parcels: <DIVISION>/LA/<FY>/<SERIAL>.
+  for (const row of rows(
+    `SELECT lp.parcel_no AS code, d.code AS division
+       FROM land_parcels lp JOIN divisions d ON d.id = lp.division_id
+      WHERE lp.parcel_no LIKE '%/LA/%'`,
+  )) {
+    set(`LAND_PARCEL:${row.division}:${row.code!.split('/')[2]!}`, tail(row.code!));
+  }
+
+  // Meeting numbers: <COMMITTEE>/<FY>/<SERIAL>.
+  for (const row of rows(
+    `SELECT m.meeting_no AS code, c.code AS committee
+       FROM meetings m JOIN committees c ON c.id = m.committee_id`,
+  )) {
+    set(`MEETING:${row.committee}:${row.code!.split('/')[1]!}`, tail(row.code!));
+  }
+
+  // RTI applications: <DIVISION>/RTI/<FY>/<SERIAL>.
+  for (const row of rows(
+    `SELECT r.request_no AS code, d.code AS division
+       FROM rti_requests r JOIN divisions d ON d.id = r.division_id
+      WHERE r.request_no LIKE '%/RTI/%'`,
+  )) {
+    set(`RTI:${row.division}:${row.code!.split('/')[2]!}`, tail(row.code!));
   }
 }
 

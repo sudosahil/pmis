@@ -26,6 +26,7 @@ export interface PermissionDefinition {
     | 'Funds'
     | 'Documents'
     | 'Communication'
+    | 'Casework'
     | 'Analytics'
     | 'Administration';
   /**
@@ -216,6 +217,84 @@ export const PERMISSIONS: PermissionDefinition[] = [
     group: 'Communication',
   },
 
+  // --- Casework ------------------------------------------------------------
+  {
+    key: 'land.view',
+    label: 'See the land acquisition register',
+    description: 'Open the parcels being acquired for a work, and their compensation position.',
+    group: 'Casework',
+  },
+  {
+    key: 'land.manage',
+    label: 'Maintain land acquisition',
+    description:
+      'Record a parcel, move it through the statutory stages of the 2013 Act, and send an award '
+      + 'for approval.',
+    group: 'Casework',
+  },
+  {
+    key: 'land.compensate',
+    label: 'Disburse land compensation',
+    description:
+      'Record compensation actually paid against an approved award. Held apart from maintaining '
+      + 'the register, because it moves money.',
+    group: 'Casework',
+  },
+  {
+    key: 'court.view',
+    label: 'See the litigation register',
+    description: 'Open the cases the department is party to, and the cause list.',
+    group: 'Casework',
+  },
+  {
+    key: 'court.manage',
+    label: 'Maintain court cases',
+    description: 'Register a case, record each hearing and close it with its outcome.',
+    group: 'Casework',
+  },
+  {
+    key: 'committees.view',
+    label: 'See committees and meetings',
+    description: 'Open committee papers, agendas, minutes and the action items they left behind.',
+    group: 'Casework',
+  },
+  {
+    key: 'committees.manage',
+    label: 'Constitute committees and convene sittings',
+    description:
+      'Set up a committee and its membership, convene a sitting, mark attendance and record the '
+      + 'minutes and decisions.',
+    group: 'Casework',
+  },
+  {
+    key: 'rti.view',
+    label: 'See the RTI register',
+    description: 'Open applications under the Right to Information Act and their appeals.',
+    group: 'Casework',
+  },
+  {
+    key: 'rti.manage',
+    label: 'Maintain the RTI register',
+    description: 'Record an application, assign the Public Information Officer, and file an appeal.',
+    group: 'Casework',
+  },
+  {
+    key: 'rti.reply',
+    label: 'Answer an RTI application',
+    description:
+      'Reply to, transfer or refuse an application. The Act makes the Public Information Officer '
+      + 'personally liable for a late or improper refusal, so this is granted deliberately.',
+    group: 'Casework',
+  },
+  {
+    key: 'rti.appeal.decide',
+    label: 'Decide an RTI appeal',
+    description:
+      'Sit as the first appellate authority. Held by the senior cadre, and never by the officer '
+      + 'whose reply is under appeal.',
+    group: 'Casework',
+  },
+
   // --- Analytics -----------------------------------------------------------
   {
     key: 'reports.view',
@@ -307,6 +386,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   [ROLES.ADMIN]: PERMISSION_KEYS,
 
   [ROLES.MD]: [
+    'land.view', 'court.view', 'committees.view', 'rti.view', 'rti.appeal.decide',
     'projects.view', 'tenders.view', 'tenders.sr.relief', 'contractors.view',
     'bills.ra.view', 'bills.misc.view',
     'funds.view', 'funds.release', 'funds.loc.approve',
@@ -315,6 +395,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   ],
 
   [ROLES.CE]: [
+    'land.view', 'court.view', 'committees.view', 'rti.view', 'land.manage', 'court.manage', 'committees.manage', 'rti.manage', 'land.compensate', 'rti.reply', 'rti.appeal.decide',
     'projects.view', 'projects.manage',
     'tenders.view', 'tenders.manage', 'tenders.evaluate', 'tenders.award', 'tenders.sr.relief',
     'contractors.view', 'contractors.manage', 'contractors.blacklist',
@@ -325,6 +406,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   ],
 
   [ROLES.SE]: [
+    'land.view', 'court.view', 'committees.view', 'rti.view', 'land.manage', 'court.manage', 'committees.manage', 'rti.manage', 'land.compensate', 'rti.reply', 'rti.appeal.decide',
     'projects.view', 'projects.manage',
     'tenders.view', 'tenders.manage', 'tenders.evaluate', 'tenders.award', 'tenders.sr.relief',
     'contractors.view', 'contractors.manage', 'contractors.blacklist',
@@ -335,6 +417,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   ],
 
   [ROLES.EE]: [
+    'land.view', 'court.view', 'committees.view', 'rti.view', 'land.manage', 'court.manage', 'committees.manage', 'rti.manage', 'land.compensate', 'rti.reply',
     'projects.view', 'projects.manage',
     'tenders.view', 'tenders.manage', 'tenders.evaluate',
     'contractors.view', 'contractors.manage',
@@ -346,6 +429,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   ],
 
   [ROLES.AEE]: [
+    'land.view', 'court.view', 'committees.view', 'rti.view', 'land.manage', 'court.manage', 'rti.manage',
     'projects.view', 'projects.manage',
     'tenders.view', 'contractors.view', 'contractors.manage',
     'bills.ra.view', 'bills.ra.raise', 'bills.misc.view',
@@ -355,6 +439,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   ],
 
   [ROLES.AE]: [
+    'land.view', 'court.view', 'committees.view', 'rti.view', 'land.manage', 'rti.manage',
     'projects.view', 'projects.manage',
     'tenders.view', 'contractors.view',
     'bills.ra.view', 'bills.ra.raise', 'bills.misc.view',
@@ -364,6 +449,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   ],
 
   [ROLES.AC]: [
+    'land.view', 'court.view', 'committees.view', 'rti.view',
     'projects.view', 'tenders.view', 'contractors.view', 'contractors.manage',
     'bills.ra.view', 'bills.ra.raise', 'bills.ra.deductions',
     'bills.misc.view', 'bills.misc.raise',
@@ -373,6 +459,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   ],
 
   [ROLES.AS]: [
+    'land.view', 'court.view', 'committees.view', 'rti.view',
     'projects.view', 'tenders.view', 'contractors.view', 'contractors.manage',
     'bills.ra.view', 'bills.ra.deductions',
     'bills.misc.view', 'bills.misc.raise',
@@ -382,6 +469,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   ],
 
   [ROLES.AAO]: [
+    'land.view', 'court.view', 'committees.view', 'rti.view', 'land.compensate',
     'projects.view', 'tenders.view', 'contractors.view', 'contractors.manage',
     'bills.ra.view', 'bills.ra.deductions', 'bills.misc.view', 'bills.treasury',
     'funds.view', 'funds.loc.approve',
@@ -390,6 +478,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   ],
 
   [ROLES.CAO]: [
+    'land.view', 'court.view', 'committees.view', 'rti.view', 'land.compensate', 'rti.appeal.decide',
     'projects.view', 'tenders.view', 'tenders.evaluate',
     'contractors.view', 'contractors.manage', 'contractors.blacklist',
     'bills.ra.view', 'bills.ra.deductions', 'bills.misc.view', 'bills.treasury',
@@ -400,6 +489,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
 
   // Read-only by design.
   [ROLES.AUDITOR]: [
+    'land.view', 'court.view', 'committees.view', 'rti.view',
     'projects.view', 'tenders.view', 'contractors.view',
     'bills.ra.view', 'bills.misc.view', 'funds.view',
     'files.view', 'chat.use',

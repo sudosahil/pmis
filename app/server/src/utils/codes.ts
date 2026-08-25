@@ -119,3 +119,27 @@ export function generateTallyVoucherNo(divisionCode: string, fy = financialYear(
   const serial = nextSequence(`TALLY:${divisionCode}:${fy}`);
   return `TV/${divisionCode}/${fy}/${pad(serial, 5)}`;
 }
+
+/** Land parcel reference: <DIVISION>/LA/<FY>/<SERIAL>. */
+export function generateParcelNo(divisionCode: string, fy = financialYear()): string {
+  const serial = nextSequence(`LAND_PARCEL:${divisionCode}:${fy}`);
+  return `${divisionCode}/LA/${fy}/${pad(serial)}`;
+}
+
+/** Meeting number within a committee: <COMMITTEE>/<FY>/<SERIAL>. */
+export function generateMeetingNo(committeeCode: string, fy = financialYear()): string {
+  const serial = nextSequence(`MEETING:${committeeCode}:${fy}`);
+  return `${committeeCode}/${fy}/${pad(serial, 3)}`;
+}
+
+/** RTI application number: <DIVISION>/RTI/<FY>/<SERIAL>. */
+export function generateRtiNo(divisionCode: string, fy = financialYear()): string {
+  const serial = nextSequence(`RTI:${divisionCode}:${fy}`);
+  return `${divisionCode}/RTI/${fy}/${pad(serial)}`;
+}
+
+/** RTI appeal number, hung off the application it disputes. */
+export function generateRtiAppealNo(requestNo: string, level: string): string {
+  const serial = nextSequence(`RTI_APPEAL:${requestNo}`);
+  return `${requestNo}/AP${level === 'SECOND' ? '2' : '1'}-${pad(serial, 2)}`;
+}

@@ -21,6 +21,12 @@ import { activityRouter } from './routes/activity.routes.js';
 import { roleRouter } from './routes/permission.routes.js';
 import { noteRouter } from './routes/record.routes.js';
 import { reportRouter } from './routes/report.routes.js';
+import {
+  committeeRouter,
+  courtRouter,
+  landRouter,
+  rtiRouter,
+} from './routes/casework.routes.js';
 import { activityLogger } from './middleware/activity.js';
 
 export function createApp(): express.Express {
@@ -84,6 +90,10 @@ export function createApp(): express.Express {
   app.use('/api/roles', roleRouter);
   app.use('/api/notes', noteRouter);
   app.use('/api/reports', reportRouter);
+  app.use('/api/land', landRouter);
+  app.use('/api/court-cases', courtRouter);
+  app.use('/api/committees', committeeRouter);
+  app.use('/api/rti', rtiRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

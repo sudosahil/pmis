@@ -107,6 +107,29 @@ GST-invoice-above-threshold rules from the submission guidelines enforced at the
 **Money.** Funds are released against schemes to divisions; divisions request letters of credit
 to pay from.
 
+**Land acquisition.** Parcels taken for a work, under the Right to Fair Compensation and
+Transparency in Land Acquisition, Rehabilitation and Resettlement Act, 2013. The stages run in
+the order the Act lays down — preliminary notification, declaration, award — and the system
+refuses one taken out of turn. Compensation is market value plus the statutory solatium rather
+than a negotiated figure, it is disbursed against an approved award in the instalments it
+actually goes out in, and possession is not taken until the award is satisfied in full.
+
+**Court cases.** Litigation the department is party to, read two ways: as a file with every
+listing on it, and as a cause list of what is coming up. A case hangs off the work, the parcel
+or the contractor it arose from rather than repeating their particulars, and closing one
+requires an outcome — a disposal that does not say which way it went records nothing.
+
+**Committees and meetings.** Standing committees with their membership and quorum, sittings
+with agendas and attendance, and minutes. Two rules carry it: a sitting short of its quorum can
+be minuted but cannot decide, and every decision names the officer who has to act on it with a
+date. A special invitee is heard but not counted towards the quorum.
+
+**Right to Information.** Applications under the RTI Act, 2005, with the statutory clock
+running from the day they arrive — thirty days, or forty-eight hours where life or liberty is
+concerned. A refusal has to cite the clause of Section 8 it rests on and say why it applies.
+The register sorts by how little time is left and shows what Section 20 exposes the Public
+Information Officer to personally, while it can still be avoided.
+
 **Reports and MIS.** Six departmental reports, each answering a question the office already
 asks on paper: contractor-wise bill submission, ageing analysis of bills, BOQ analysis against
 the schedule, Schedule of Rates analysis, the change history of every rate, and approval
@@ -207,6 +230,21 @@ simply overwritten. Every movement is written to `schedule_of_rate_history` with
 the new one, the date it took effect, the circular behind it and who recorded it. The item's
 code and name are copied onto the entry rather than joined, so the history still reads after the
 master row itself is gone.
+
+### Statute in the code, not in a manual
+
+Three of the casework modules encode rules that come from an Act rather than from departmental
+practice, and each is held where it cannot be talked around:
+
+- **Land acquisition** runs the stages of the 2013 Act in order and refuses one taken out of
+  turn; solatium defaults to the hundred per cent Section 30 prescribes; possession waits on
+  payment; and compensation cannot be revised below what has already gone out.
+- **The Right to Information** clock is computed at receipt and stored, because a due date the
+  register recalculates is one somebody can argue with. A refusal without a clause is refused by
+  the service as well as by the request schema — the rule is about the record, not about the
+  shape of a request, so a second caller cannot get round it.
+- **Committee quorum** counts members, not attendees. A sitting of two members and three special
+  invitees is still a sitting of two, and it may be minuted but may not decide.
 
 ### One registry for fourteen masters
 
