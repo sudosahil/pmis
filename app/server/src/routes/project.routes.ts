@@ -12,6 +12,8 @@ import { authenticate, requirePermission } from '../middleware/auth.js';
 import * as recordController from '../controllers/record.controller.js';
 import * as recordService from '../services/record.service.js';
 import * as boqService from '../services/boq.service.js';
+import * as tenderService from '../services/tender.service.js';
+import * as tenderController from '../controllers/tender.controller.js';
 import * as documentService from '../services/document.service.js';
 import { asyncHandler } from '../middleware/error.js';
 import { validate } from '../middleware/validate.js';
@@ -153,6 +155,27 @@ projectRouter.delete(
   '/:id/dprs/:dprId',
   requirePermission('projects.manage'),
   asyncHandler(recordController.removeDpr),
+);
+
+// The item-wise estimate the report is prepared from, and the conversion of
+// that report into a tender document once it has been approved.
+projectRouter.get('/:id/dprs/:dprId/items', asyncHandler(recordController.listDprItems));
+projectRouter.put(
+  '/:id/dprs/:dprId/items',
+  requirePermission('projects.manage'),
+  validate(recordService.replaceDprItemsSchema),
+  asyncHandler(recordController.replaceDprItems),
+);
+projectRouter.post(
+  '/:id/dprs/:dprId/reprice',
+  requirePermission('projects.manage'),
+  asyncHandler(recordController.repriceDprItems),
+);
+projectRouter.post(
+  '/:id/dprs/:dprId/convert-to-tender',
+  requirePermission('tenders.manage'),
+  validate(tenderService.convertDprSchema),
+  asyncHandler(tenderController.convertDpr),
 );
 
 // --- Progress updates --------------------------------------------------------

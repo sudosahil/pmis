@@ -1,4 +1,5 @@
 import { useState, type ChangeEvent } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -6,10 +7,14 @@ import { useToast } from './Toast';
 import { date, rupees, today } from '../lib/format';
 import type { ProjectDpr } from '../types';
 import {
-  Alert, Button, Card, DetailItem, EditIcon, EmptyState, Loading, PlusIcon, TextArea, TextInput,
+  Alert, Button, Card, DetailItem, EditIcon, EmptyState, GavelIcon, LayersIcon, Loading,
+  PlusIcon, TextArea, TextInput,
 } from './ui';
 import { Modal } from './Modal';
 import { StatusBadge } from './StatusBadge';
+import {
+  ConvertToTenderDialog, DprAbstractStrip, DprEstimateDialog, DprEstimateView, DprStaleNotice,
+} from './DprEstimate';
 
 /**
  * The Detailed Project Report — the document an Administrative Approval is
@@ -22,11 +27,15 @@ import { StatusBadge } from './StatusBadge';
 export function DprPanel({ projectId }: { projectId: number }) {
   const queryClient = useQueryClient();
   const toast = useToast();
+  const navigate = useNavigate();
   const { can } = useAuth();
 
   const [editing, setEditing] = useState<ProjectDpr | null>(null);
   const [adding, setAdding] = useState(false);
   const [deciding, setDeciding] = useState<ProjectDpr | null>(null);
+  const [pricing, setPricing] = useState<ProjectDpr | null>(null);
+  const [converting, setConverting] = useState<ProjectDpr | null>(null);
+  const [expanded, setExpanded] = useState<number | null>(null);
 
   const key = ['project-dprs', projectId];
   const { data, isLoading } = useQuery({
@@ -35,7 +44,11 @@ export function DprPanel({ projectId }: { projectId: number }) {
   });
 
   const canEdit = can('projects.manage');
+  const canTender = can('tenders.manage');
   const dprs = data ?? [];
+
+  /** An approved report is a record, and a converted one belongs to its tender. */
+  const isEditable = (dpr: ProjectDpr) => dpr.status !== 'APPROVED' && !dpr.tender;
 
   return (
     <>
@@ -87,8 +100,23 @@ export function DprPanel({ projectId }: { projectId: number }) {
                           aria-label="Edit"
                           onClick={() => setEditing(dpr)}
                         />
+                        {isEditable(dpr) && (
+                          <Button size="sm" icon={<LayersIcon size={14} />} onClick={() => setPricing(dpr)}>
+                            {dpr.abstract.isPriced ? 'Edit estimate' : 'Prepare estimate'}
+                          </Button>
+                        )}
                         {dpr.status !== 'APPROVED' && (
                           <Button size="sm" onClick={() => setDeciding(dpr)}>Record decision</Button>
+                        )}
+                        {canTender && dpr.status === 'APPROVED' && !dpr.tender && dpr.abstract.isPriced && (
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            icon={<GavelIcon size={14} />}
+                            onClick={() => setConverting(dpr)}
+                          >
+                            Convert to tender
+                          </Button>
                         )}
                       </div>
                     )}
@@ -109,6 +137,29 @@ export function DprPanel({ projectId }: { projectId: number }) {
                   />
                 </div>
 
+                <DprAbstractStrip dpr={dpr} />
+
+                {dpr.tender && (
+                  <Alert variant="ok" title="Converted into a tender document">
+                    The estimate became the bill of quantities of{' '}
+                    <Link to={`/tenders/${dpr.tender.id}`} className="code">{dpr.tender.tenderNo}</Link>
+                    , and the Schedule of Rates lines behind it became the bidding ceiling. A change
+                    from here means a revision of the report, raised under the same DPR number.
+                  </Alert>
+                )}
+
+                {dpr.abstract.isPriced && (
+                  <DprStaleNotice projectId={projectId} dpr={dpr} canEdit={canEdit} />
+                )}
+
+                {dpr.status === 'APPROVED' && !dpr.abstract.isPriced && (
+                  <Alert variant="warn" title="This report carries no item-wise estimate">
+                    It cannot be converted into a tender document until it is priced against the
+                    Schedule of Rates — a tender needs a bill of quantities and a bidding ceiling,
+                    and both come from the estimate.
+                  </Alert>
+                )}
+
                 {dpr.scope && (
                   <p style={{ marginTop: 8, whiteSpace: 'pre-wrap' }}>
                     <strong>Scope. </strong>{dpr.scope}
@@ -121,6 +172,24 @@ export function DprPanel({ projectId }: { projectId: number }) {
                 )}
                 {dpr.remarks && (
                   <p style={{ marginTop: 6, color: 'var(--ink-700)' }}>{dpr.remarks}</p>
+                )}
+
+                {dpr.abstract.isPriced && (
+                  <div style={{ marginTop: 10 }}>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setExpanded(expanded === dpr.id ? null : dpr.id)}
+                      aria-expanded={expanded === dpr.id}
+                    >
+                      {expanded === dpr.id ? 'Hide the estimate' : `Show the estimate (${dpr.abstract.itemCount} items)`}
+                    </Button>
+                    {expanded === dpr.id && (
+                      <div style={{ marginTop: 8 }}>
+                        <DprEstimateView projectId={projectId} dprId={dpr.id} />
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             ))}
@@ -147,6 +216,31 @@ export function DprPanel({ projectId }: { projectId: number }) {
           }}
         />
       )}
+      {pricing && (
+        <DprEstimateDialog
+          projectId={projectId}
+          dpr={pricing}
+          onClose={() => setPricing(null)}
+          onSaved={() => {
+            void queryClient.invalidateQueries({ queryKey: key });
+            void queryClient.invalidateQueries({ queryKey: ['dpr-estimate', pricing.id] });
+          }}
+        />
+      )}
+      {converting && (
+        <ConvertToTenderDialog
+          dpr={converting}
+          onClose={() => setConverting(null)}
+          onConverted={(tenderId) => {
+            toast.success(
+              'Tender document created',
+              'Add the pre-qualification and technical criteria before sending it for approval.',
+            );
+            void queryClient.invalidateQueries({ queryKey: key });
+            navigate(`/tenders/${tenderId}`);
+          }}
+        />
+      )}
     </>
   );
 }
@@ -170,8 +264,14 @@ function DprDialog({
     submissionDate: dpr?.submissionDate ?? today(),
     scope: dpr?.scope ?? '',
     justification: dpr?.justification ?? '',
+    srEdition: dpr?.abstract.srEdition ?? '',
+    contingencyPercent: dpr ? String(dpr.abstract.contingencyPercent) : '3',
+    establishmentPercent: dpr ? String(dpr.abstract.establishmentPercent) : '2',
     remarks: dpr?.remarks ?? '',
   });
+
+  /** Once the report is priced, its cost is the foot of its own estimate. */
+  const isPriced = Boolean(dpr?.abstract.isPriced);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<string | null>(null);
 
@@ -190,6 +290,9 @@ function DprDialog({
         submissionDate: form.submissionDate || undefined,
         scope: form.scope || undefined,
         justification: form.justification || undefined,
+        srEdition: form.srEdition || undefined,
+        contingencyPercent: form.contingencyPercent || undefined,
+        establishmentPercent: form.establishmentPercent || undefined,
         remarks: form.remarks || undefined,
       };
       return isEdit
@@ -262,6 +365,12 @@ function DprDialog({
             value={form.estimatedCost}
             onChange={set('estimatedCost')}
             error={errors.estimatedCost}
+            disabled={isPriced}
+            hint={
+              isPriced
+                ? 'Taken from the abstract of cost, so it cannot be typed over.'
+                : 'A single figure until the report is priced item by item.'
+            }
           />
           <TextInput
             label="Submitted on"
@@ -269,6 +378,29 @@ function DprDialog({
             value={form.submissionDate}
             onChange={set('submissionDate')}
             error={errors.submissionDate}
+          />
+          <TextInput
+            label="SR edition"
+            value={form.srEdition}
+            onChange={set('srEdition')}
+            error={errors.srEdition}
+            hint="The Schedule of Rates edition the estimate is priced from, e.g. 2024-25."
+          />
+          <TextInput
+            label="Contingency"
+            numeric
+            value={form.contingencyPercent}
+            onChange={set('contingencyPercent')}
+            error={errors.contingencyPercent}
+            hint="Percentage added to the priced items."
+          />
+          <TextInput
+            label="Work-charged establishment"
+            numeric
+            value={form.establishmentPercent}
+            onChange={set('establishmentPercent')}
+            error={errors.establishmentPercent}
+            hint="Percentage added to the priced items."
           />
           <TextInput
             label="Prepared by"

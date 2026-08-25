@@ -202,22 +202,33 @@ export interface DprRow {
   submission_date: string | null;
   scope: string | null;
   justification: string | null;
+  sr_edition: string | null;
+  items_total: number;
+  contingency_bps: number;
+  establishment_bps: number;
   status: string;
   approved_by: string | null;
   approval_date: string | null;
   remarks: string | null;
   document_id: number | null;
   document_name: string | null;
+  tender_id: number | null;
+  tender_no: string | null;
+  tender_status: string | null;
   created_by: number | null;
   created_by_name: string | null;
+  item_count: number;
   created_at: string;
 }
 
 const DPR_SELECT = `
-  SELECT p.*, d.name AS document_name, u.full_name AS created_by_name
+  SELECT p.*, d.name AS document_name, u.full_name AS created_by_name,
+         t.tender_no, t.status AS tender_status,
+         (SELECT COUNT(*) FROM project_dpr_items i WHERE i.dpr_id = p.id) AS item_count
     FROM project_dprs p
     LEFT JOIN documents d ON d.id = p.document_id
-    LEFT JOIN users u ON u.id = p.created_by`;
+    LEFT JOIN users u ON u.id = p.created_by
+    LEFT JOIN tenders t ON t.id = p.tender_id`;
 
 export function listDprs(projectId: number): DprRow[] {
   return getDb()
@@ -240,6 +251,9 @@ export function insertDpr(values: {
   submission_date: string | null;
   scope: string | null;
   justification: string | null;
+  sr_edition: string | null;
+  contingency_bps: number;
+  establishment_bps: number;
   status: string;
   remarks: string | null;
   document_id: number | null;
@@ -249,10 +263,12 @@ export function insertDpr(values: {
     .prepare(
       `INSERT INTO project_dprs
          (project_id, dpr_no, version, title, prepared_by, consultant, estimated_cost,
-          submission_date, scope, justification, status, remarks, document_id, created_by)
+          submission_date, scope, justification, sr_edition, contingency_bps,
+          establishment_bps, status, remarks, document_id, created_by)
        VALUES
          (@project_id, @dpr_no, @version, @title, @prepared_by, @consultant, @estimated_cost,
-          @submission_date, @scope, @justification, @status, @remarks, @document_id, @created_by)`,
+          @submission_date, @scope, @justification, @sr_edition, @contingency_bps,
+          @establishment_bps, @status, @remarks, @document_id, @created_by)`,
     )
     .run(values);
   return Number(result.lastInsertRowid);
@@ -282,6 +298,112 @@ export function nextDprVersion(projectId: number, dprNo: string): number {
     )
     .get(projectId, dprNo);
   return (row?.v ?? 0) + 1;
+}
+
+// --- DPR estimate lines ------------------------------------------------------
+
+export interface DprItemRow {
+  id: number;
+  dpr_id: number;
+  sl_no: number;
+  sr_item_id: number | null;
+  sr_code: string | null;
+  sr_name: string | null;
+  sr_current_rate: number | null;
+  item_code: string | null;
+  description: string;
+  uom: string;
+  quantity: number;
+  rate: number;
+  sr_rate: number;
+  amount: number;
+  remarks: string | null;
+  created_at: string;
+}
+
+/**
+ * An estimate line with the Schedule of Rates line behind it. The item's
+ * *current* rate is read alongside the rate frozen onto the estimate, so a
+ * preparer can see at a glance where the rate book has moved since.
+ */
+const DPR_ITEM_SELECT = `
+  SELECT i.*, sr.code AS sr_code, sr.name AS sr_name, sr.rate AS sr_current_rate
+    FROM project_dpr_items i
+    LEFT JOIN schedule_of_rates sr ON sr.id = i.sr_item_id`;
+
+export function listDprItems(dprId: number): DprItemRow[] {
+  return getDb()
+    .prepare(`${DPR_ITEM_SELECT} WHERE i.dpr_id = ? ORDER BY i.sl_no`)
+    .all(dprId) as DprItemRow[];
+}
+
+export function replaceDprItems(
+  dprId: number,
+  items: {
+    sl_no: number;
+    sr_item_id: number | null;
+    item_code: string | null;
+    description: string;
+    uom: string;
+    quantity: number;
+    rate: number;
+    sr_rate: number;
+    amount: number;
+    remarks: string | null;
+  }[],
+): void {
+  const db = getDb();
+  db.prepare(`DELETE FROM project_dpr_items WHERE dpr_id = ?`).run(dprId);
+  const stmt = db.prepare(
+    `INSERT INTO project_dpr_items
+       (dpr_id, sl_no, sr_item_id, item_code, description, uom, quantity, rate, sr_rate, amount, remarks)
+     VALUES
+       (@dpr_id, @sl_no, @sr_item_id, @item_code, @description, @uom, @quantity, @rate, @sr_rate, @amount, @remarks)`,
+  );
+  for (const item of items) stmt.run({ dpr_id: dprId, ...item });
+}
+
+/** The abstract of cost: what the priced items come to, before the percentages. */
+export function dprItemsTotal(dprId: number): number {
+  const row = getDb()
+    .prepare<[number], { total: number | null }>(
+      `SELECT SUM(amount) AS total FROM project_dpr_items WHERE dpr_id = ?`,
+    )
+    .get(dprId);
+  return row?.total ?? 0;
+}
+
+export interface ScheduleOfRatesItem {
+  id: number;
+  code: string;
+  name: string;
+  uom: string;
+  rate: number;
+  status: string;
+}
+
+/** A Schedule of Rates line, read when an estimate line is priced from it. */
+export function findScheduleOfRatesItem(id: number): ScheduleOfRatesItem | null {
+  return (
+    (getDb()
+      .prepare(`SELECT id, code, name, uom, rate, status FROM schedule_of_rates WHERE id = ?`)
+      .get(id) as ScheduleOfRatesItem | undefined) ?? null
+  );
+}
+
+/**
+ * The same, found by the item number a bill of quantities was written against.
+ * Only an active line matches: a withdrawn rate is not a ceiling.
+ */
+export function findScheduleOfRatesItemByCode(code: string): ScheduleOfRatesItem | null {
+  return (
+    (getDb()
+      .prepare(
+        `SELECT id, code, name, uom, rate, status FROM schedule_of_rates
+          WHERE code = ? AND status = 'ACTIVE'`,
+      )
+      .get(code) as ScheduleOfRatesItem | undefined) ?? null
+  );
 }
 
 // --- Package progress updates ------------------------------------------------

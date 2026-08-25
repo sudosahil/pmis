@@ -3,6 +3,8 @@ import * as controller from '../controllers/tender.controller.js';
 import {
   awardSchema,
   createTenderSchema,
+  replaceCriteriaSchema,
+  srReliefSchema,
   submitBidSchema,
   technicalEvaluationSchema,
   updateTenderSchema,
@@ -67,6 +69,31 @@ tenderRouter.post(
   requirePermission('tenders.manage'),
   validate(controller.reasonSchema),
   asyncHandler(controller.cancel),
+);
+
+// Qualification criteria — the pre-qualification and technical requirements a
+// tender document adds to the Detailed Project Report it was raised from.
+tenderRouter.get('/:id/criteria', asyncHandler(controller.listCriteria));
+tenderRouter.put(
+  '/:id/criteria',
+  requirePermission('tenders.manage'),
+  validate(replaceCriteriaSchema),
+  asyncHandler(controller.replaceCriteria),
+);
+
+// Relief from the Schedule of Rates ceiling. A senior decision, taken on a
+// stated ground and before bidding opens, so it is held apart from the
+// permission that merely lets an officer draft a tender.
+tenderRouter.post(
+  '/:id/sr-relief',
+  requirePermission('tenders.sr.relief'),
+  validate(srReliefSchema),
+  asyncHandler(controller.grantSrRelief),
+);
+tenderRouter.delete(
+  '/:id/sr-relief',
+  requirePermission('tenders.sr.relief'),
+  asyncHandler(controller.withdrawSrRelief),
 );
 
 // Evaluation and award.

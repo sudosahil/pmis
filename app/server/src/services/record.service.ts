@@ -10,8 +10,8 @@ import { assertVisible as assertPackageVisible } from './package.service.js';
 import * as documentService from './document.service.js';
 import type { AuthUser } from '../types/auth.js';
 import { badRequest, conflict, forbidden, notFound } from '../utils/errors.js';
-import { toRupees } from '../utils/money.js';
-import { isoDate, rupees } from '../middleware/validate.js';
+import { applyBps, fromBps, fromQty, lineAmount, toRupees } from '../utils/money.js';
+import { isoDate, percent, quantity, rupees } from '../middleware/validate.js';
 
 /**
  * The paperwork a government file carries: the noting sheet officers write on
@@ -69,12 +69,39 @@ export const dprSchema = z.object({
   title: z.string().trim().min(3, 'Give the report a title.').max(250),
   preparedBy: z.string().trim().max(160).optional(),
   consultant: z.string().trim().max(160).optional(),
+  /** Used only while the report carries no priced items; otherwise derived. */
   estimatedCost: rupees,
   submissionDate: isoDate.optional(),
   scope: z.string().trim().max(4000).optional(),
   justification: z.string().trim().max(4000).optional(),
+  srEdition: z.string().trim().max(20).optional(),
+  contingencyPercent: percent.optional(),
+  establishmentPercent: percent.optional(),
   remarks: z.string().trim().max(1000).optional(),
   documentId: z.coerce.number().int().positive().optional().nullable(),
+});
+
+/**
+ * One line of the item-wise estimate.
+ *
+ * `srItemId` is what makes this an estimate rather than a guess: the rate comes
+ * from the rate book, and the server reads it there rather than trusting the
+ * figure the form sent. A line may still be priced by hand — a non-schedule
+ * item — and then it carries no SR rate to be read against.
+ */
+export const dprItemSchema = z.object({
+  srItemId: z.coerce.number().int().positive().optional().nullable(),
+  itemCode: z.string().trim().max(40).optional(),
+  description: z.string().trim().min(2, 'Describe the item of work.').max(500),
+  uom: z.string().trim().min(1, 'Enter the unit.').max(20),
+  quantity,
+  /** Omitted when the line is priced from the Schedule of Rates. */
+  rate: rupees.optional(),
+  remarks: z.string().trim().max(300).optional(),
+});
+
+export const replaceDprItemsSchema = z.object({
+  items: z.array(dprItemSchema).max(500),
 });
 
 export const dprDecisionSchema = z.object({
@@ -318,7 +345,10 @@ export function removeSanction(id: number, user: AuthUser): void {
 
 // --- DPR -------------------------------------------------------------------
 
-function presentDpr(row: recordModel.DprRow) {
+export function presentDpr(row: recordModel.DprRow) {
+  const contingency = applyBps(row.items_total, row.contingency_bps);
+  const establishment = applyBps(row.items_total, row.establishment_bps);
+
   return {
     id: row.id,
     projectId: row.project_id,
@@ -336,6 +366,23 @@ function presentDpr(row: recordModel.DprRow) {
     approvalDate: row.approval_date,
     remarks: row.remarks,
     document: row.document_id ? { id: row.document_id, name: row.document_name } : null,
+    /** The abstract of cost, as it appears at the foot of the estimate. */
+    abstract: {
+      srEdition: row.sr_edition,
+      itemCount: row.item_count,
+      itemsTotal: toRupees(row.items_total),
+      contingencyPercent: fromBps(row.contingency_bps),
+      contingencyAmount: toRupees(contingency),
+      establishmentPercent: fromBps(row.establishment_bps),
+      establishmentAmount: toRupees(establishment),
+      total: toRupees(row.items_total + contingency + establishment),
+      /** True once the report is a priced estimate rather than a single figure. */
+      isPriced: row.item_count > 0,
+    },
+    /** Set once the report has been converted into a tender document. */
+    tender: row.tender_id
+      ? { id: row.tender_id, tenderNo: row.tender_no, status: row.tender_status }
+      : null,
     createdBy: row.created_by_name,
     createdAt: row.created_at,
   };
@@ -367,6 +414,9 @@ export function addDpr(projectId: number, input: z.infer<typeof dprSchema>, user
     submission_date: input.submissionDate ?? null,
     scope: input.scope ?? null,
     justification: input.justification ?? null,
+    sr_edition: input.srEdition ?? null,
+    contingency_bps: input.contingencyPercent ?? 0,
+    establishment_bps: input.establishmentPercent ?? 0,
     status: 'DRAFT',
     remarks: input.remarks ?? null,
     document_id: input.documentId ?? null,
@@ -402,15 +452,28 @@ export function updateDpr(id: number, input: z.infer<typeof dprSchema>, user: Au
     title: input.title,
     prepared_by: input.preparedBy ?? null,
     consultant: input.consultant ?? null,
-    estimated_cost: input.estimatedCost,
+    // A priced report's cost is the abstract of its own items, not a figure
+    // typed on the header. Only a report with no items takes the typed one.
+    estimated_cost:
+      existing.item_count > 0
+        ? abstractTotal(existing.items_total, input.contingencyPercent ?? 0, input.establishmentPercent ?? 0)
+        : input.estimatedCost,
     submission_date: input.submissionDate ?? null,
     scope: input.scope ?? null,
     justification: input.justification ?? null,
+    sr_edition: input.srEdition ?? null,
+    contingency_bps: input.contingencyPercent ?? 0,
+    establishment_bps: input.establishmentPercent ?? 0,
     remarks: input.remarks ?? null,
     document_id: input.documentId ?? null,
   });
 
   return presentDpr(recordModel.findDpr(id)!);
+}
+
+/** Items, plus contingency and work-charged establishment on top of them. */
+function abstractTotal(itemsTotal: number, contingencyBps: number, establishmentBps: number): number {
+  return itemsTotal + applyBps(itemsTotal, contingencyBps) + applyBps(itemsTotal, establishmentBps);
 }
 
 export function decideDpr(
@@ -452,7 +515,202 @@ export function removeDpr(id: number, user: AuthUser): void {
   if (existing.status === 'APPROVED') {
     throw conflict('An approved DPR cannot be deleted.');
   }
+  if (existing.tender_id) {
+    throw conflict('This report has been converted into a tender and cannot be deleted.');
+  }
   recordModel.deleteDpr(id);
+}
+
+// --- The DPR estimate --------------------------------------------------------
+
+/**
+ * The item-wise estimate a Detailed Project Report is actually prepared from.
+ *
+ * Each line names an item of work and takes its rate from the Schedule of
+ * Rates; quantity times rate is the abstract of cost, and contingency and
+ * work-charged establishment are added on top. That abstract then becomes the
+ * tender's estimated value and its bill of quantities when the report is
+ * converted, which is why the rate is read from the rate book here rather than
+ * accepted from the form.
+ */
+
+export function presentDprItem(row: recordModel.DprItemRow) {
+  const hasSr = row.sr_rate > 0;
+  return {
+    id: row.id,
+    slNo: row.sl_no,
+    itemCode: row.item_code,
+    description: row.description,
+    uom: row.uom,
+    quantity: fromQty(row.quantity),
+    rate: toRupees(row.rate),
+    amount: toRupees(row.amount),
+    remarks: row.remarks,
+    sr: hasSr
+      ? {
+          id: row.sr_item_id,
+          code: row.sr_code,
+          name: row.sr_name,
+          /** The rate frozen onto this estimate when it was prepared. */
+          rate: toRupees(row.sr_rate),
+          /** What the rate book says today, which may have moved since. */
+          currentRate: row.sr_current_rate === null ? null : toRupees(row.sr_current_rate),
+          hasMoved: row.sr_current_rate !== null && row.sr_current_rate !== row.sr_rate,
+          /** How far this line is priced above or below the schedule. */
+          variancePercent: Math.round(((row.rate - row.sr_rate) / row.sr_rate) * 10_000) / 100,
+        }
+      : null,
+  };
+}
+
+function assertDprEditable(row: recordModel.DprRow): void {
+  if (row.status === 'APPROVED') {
+    throw conflict(
+      'An approved DPR is a record and its estimate cannot be changed. Add a revision instead — ' +
+        'reusing the same DPR number creates the next version.',
+    );
+  }
+  if (row.tender_id) {
+    throw conflict(
+      'This report has been converted into a tender document. Amend the tender, or raise a revision of the report.',
+    );
+  }
+}
+
+function loadDpr(dprId: number, user: AuthUser): recordModel.DprRow {
+  const dpr = recordModel.findDpr(dprId);
+  if (!dpr) throw notFound('DPR');
+  const project = projectModel.findById(dpr.project_id);
+  if (!project) throw notFound('Project');
+  assertProjectVisible(project, user);
+  return dpr;
+}
+
+export function listDprItems(dprId: number, user: AuthUser) {
+  const dpr = loadDpr(dprId, user);
+  const items = recordModel.listDprItems(dprId).map(presentDprItem);
+
+  return {
+    dprId,
+    items,
+    abstract: presentDpr(dpr).abstract,
+    /** Lines whose Schedule of Rates entry has been revised since pricing. */
+    staleLineCount: items.filter((item) => item.sr?.hasMoved).length,
+  };
+}
+
+/** Replaces the whole estimate. Renumbers as it saves, so gaps cannot persist. */
+export function replaceDprItems(
+  dprId: number,
+  input: z.infer<typeof replaceDprItemsSchema>,
+  user: AuthUser,
+) {
+  const dpr = loadDpr(dprId, user);
+  assertDprEditable(dpr);
+
+  return transaction(() => {
+    const rows = input.items.map((item, index) => {
+      // A line pointing at the rate book is priced from the rate book. Only a
+      // non-schedule item may carry a rate typed into the form.
+      const sr = item.srItemId ? recordModel.findScheduleOfRatesItem(item.srItemId) : null;
+      if (item.srItemId && !sr) {
+        throw badRequest(`Item ${index + 1} points at a Schedule of Rates line that no longer exists.`);
+      }
+      const rate = sr ? sr.rate : (item.rate ?? 0);
+      if (rate <= 0) {
+        throw badRequest(
+          `Item ${index + 1} (${item.description}) has no rate. ` +
+            'Choose a Schedule of Rates item, or enter a rate for a non-schedule item.',
+        );
+      }
+
+      return {
+        sl_no: index + 1,
+        sr_item_id: sr?.id ?? null,
+        item_code: item.itemCode ?? sr?.code ?? null,
+        description: item.description,
+        uom: item.uom,
+        quantity: item.quantity,
+        rate,
+        sr_rate: sr?.rate ?? 0,
+        amount: lineAmount(item.quantity, rate),
+        remarks: item.remarks ?? null,
+      };
+    });
+
+    recordModel.replaceDprItems(dprId, rows);
+
+    // The header cost is the foot of the estimate, so it is rewritten here
+    // rather than left to whatever was typed on the form.
+    const itemsTotal = recordModel.dprItemsTotal(dprId);
+    recordModel.updateDpr(dprId, {
+      items_total: itemsTotal,
+      estimated_cost: abstractTotal(itemsTotal, dpr.contingency_bps, dpr.establishment_bps),
+    });
+
+    insertAuditEntry({
+      userId: user.id,
+      action: 'DPR_ESTIMATE_SET',
+      entityType: 'PROJECT',
+      entityId: dpr.project_id,
+      detail: `${dpr.dpr_no} v${dpr.version}: ${rows.length} item(s), ${toRupees(itemsTotal)}`,
+    });
+
+    return listDprItems(dprId, user);
+  });
+}
+
+/**
+ * Reprices the estimate against the rate book as it stands today.
+ *
+ * A DPR prepared before a rate revision is priced at the old rates, which is
+ * correct until someone decides otherwise — so this is a deliberate action, not
+ * something that happens quietly when the rate book changes.
+ */
+export function repriceDprItems(dprId: number, user: AuthUser) {
+  const dpr = loadDpr(dprId, user);
+  assertDprEditable(dpr);
+
+  return transaction(() => {
+    const existing = recordModel.listDprItems(dprId);
+    let moved = 0;
+
+    const rows = existing.map((row) => {
+      const sr = row.sr_item_id ? recordModel.findScheduleOfRatesItem(row.sr_item_id) : null;
+      const rate = sr ? sr.rate : row.rate;
+      if (sr && sr.rate !== row.sr_rate) moved += 1;
+
+      return {
+        sl_no: row.sl_no,
+        sr_item_id: row.sr_item_id,
+        item_code: row.item_code,
+        description: row.description,
+        uom: row.uom,
+        quantity: row.quantity,
+        rate,
+        sr_rate: sr?.rate ?? row.sr_rate,
+        amount: lineAmount(row.quantity, rate),
+        remarks: row.remarks,
+      };
+    });
+
+    recordModel.replaceDprItems(dprId, rows);
+    const itemsTotal = recordModel.dprItemsTotal(dprId);
+    recordModel.updateDpr(dprId, {
+      items_total: itemsTotal,
+      estimated_cost: abstractTotal(itemsTotal, dpr.contingency_bps, dpr.establishment_bps),
+    });
+
+    insertAuditEntry({
+      userId: user.id,
+      action: 'DPR_ESTIMATE_REPRICED',
+      entityType: 'PROJECT',
+      entityId: dpr.project_id,
+      detail: `${dpr.dpr_no} v${dpr.version}: ${moved} line(s) repriced, now ${toRupees(itemsTotal)}`,
+    });
+
+    return listDprItems(dprId, user);
+  });
 }
 
 // --- Package progress updates ------------------------------------------------

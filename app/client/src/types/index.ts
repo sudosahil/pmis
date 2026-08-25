@@ -378,6 +378,73 @@ export interface BoqItem {
   quantity: number;
   estimatedRate: number;
   estimatedAmount: number;
+  /** The Schedule of Rates line this item was priced from, where there is one. */
+  sr: { id: number | null; code: string | null; name: string | null; rate: number } | null;
+  /** The most a bid may quote against this line. Null when no ceiling applies. */
+  ceilingRate: number | null;
+}
+
+/** How a bid answered one published qualification criterion. */
+export interface BidCriterionResponse {
+  criterionId: number;
+  kind: 'PQ' | 'TQ';
+  slNo: number;
+  title: string;
+  requirement: string;
+  isMandatory: boolean;
+  maxScore: number;
+  isMet: boolean;
+  score: number;
+  remarks: string | null;
+}
+
+export interface TenderCriterion {
+  id: number;
+  kind: 'PQ' | 'TQ';
+  slNo: number;
+  title: string;
+  requirement: string;
+  evidence: string | null;
+  isMandatory: boolean;
+  maxScore: number;
+}
+
+export const ABOVE_SR_GROUNDS = [
+  'WAR',
+  'PANDEMIC',
+  'PRICE_ESCALATION',
+  'NATURAL_CALAMITY',
+  'OTHER',
+] as const;
+
+export type AboveSrGround = (typeof ABOVE_SR_GROUNDS)[number];
+
+export const ABOVE_SR_GROUND_LABELS: Record<AboveSrGround, string> = {
+  WAR: 'War or armed conflict',
+  PANDEMIC: 'Pandemic',
+  PRICE_ESCALATION: 'Market price escalation since the SR edition',
+  NATURAL_CALAMITY: 'Natural calamity',
+  OTHER: 'Other special consideration',
+};
+
+/**
+ * The bidding ceiling. A contractor may quote below the approved government
+ * rates but not above them, unless the department has granted relief — and then
+ * only as far as that relief allows.
+ */
+export interface SrCeiling {
+  enforced: boolean;
+  baselineAmount: number;
+  effectiveAmount: number;
+  relief: {
+    capPercent: number;
+    ground: AboveSrGround | null;
+    groundLabel: string | null;
+    authority: string | null;
+    remarks: string | null;
+    grantedBy: string | null;
+    grantedAt: string | null;
+  } | null;
 }
 
 export interface Bid {
@@ -399,7 +466,12 @@ export interface Bid {
   submittedAt: string | null;
   quotedAmount: number | null;
   variation: number | null;
+  /** How the bid sat against the approved rates, rather than against the estimate. */
+  srVariation: number | null;
+  srCeilingAmount: number | null;
+  isAboveSr: boolean;
   financialsSealed: boolean;
+  criteria: BidCriterionResponse[];
 }
 
 export interface Tender {
@@ -419,6 +491,9 @@ export interface Tender {
   completionPeriodDays: number;
   minRegistrationClass: string | null;
   eligibilityCriteria: string | null;
+  srCeiling: SrCeiling;
+  /** Set when the tender was raised from a Detailed Project Report. */
+  dpr: { id: number; dprNo: string | null; version: number | null } | null;
   publishDate: string | null;
   bidStartAt: string | null;
   bidEndAt: string | null;
@@ -435,6 +510,7 @@ export interface Tender {
 
 export interface TenderDetail extends Tender {
   boqItems: BoqItem[];
+  criteria: { pq: TenderCriterion[]; tq: TenderCriterion[]; tqMaxScore: number };
   bids: Bid[];
   award: {
     id: number;
@@ -555,8 +631,129 @@ export interface ProjectDpr {
   approvalDate: string | null;
   remarks: string | null;
   document: { id: number; name: string | null } | null;
+  /** The abstract of cost, as it appears at the foot of the estimate. */
+  abstract: DprAbstract;
+  /** Set once the report has been converted into a tender document. */
+  tender: { id: number; tenderNo: string | null; status: string | null } | null;
   createdBy: string | null;
   createdAt: string;
+}
+
+export interface DprAbstract {
+  srEdition: string | null;
+  itemCount: number;
+  itemsTotal: number;
+  contingencyPercent: number;
+  contingencyAmount: number;
+  establishmentPercent: number;
+  establishmentAmount: number;
+  total: number;
+  /** True once the report is a priced estimate rather than a single figure. */
+  isPriced: boolean;
+}
+
+/**
+ * One line of the item-wise estimate a report is prepared from. A line priced
+ * from the Schedule of Rates carries the rate it was frozen at, and whether the
+ * rate book has moved since.
+ */
+export interface DprItem {
+  id: number;
+  slNo: number;
+  itemCode: string | null;
+  description: string;
+  uom: string;
+  quantity: number;
+  rate: number;
+  amount: number;
+  remarks: string | null;
+  sr: {
+    id: number | null;
+    code: string | null;
+    name: string | null;
+    rate: number;
+    currentRate: number | null;
+    hasMoved: boolean;
+    variancePercent: number;
+  } | null;
+}
+
+export interface DprEstimate {
+  dprId: number;
+  items: DprItem[];
+  abstract: DprAbstract;
+  /** Lines whose Schedule of Rates entry has been revised since pricing. */
+  staleLineCount: number;
+}
+
+// --- Reports and MIS -------------------------------------------------------
+
+export interface ReportDefinition {
+  key: string;
+  label: string;
+  description: string;
+  group: string;
+}
+
+export interface ReportCatalogue {
+  reports: ReportDefinition[];
+  financialYear: string;
+  divisions: { id: number; code: string; name: string }[];
+  changeKinds: readonly string[];
+  ageingBuckets: { key: string; label: string }[];
+}
+
+/** How one column of a report should be read: as money, a percentage, a date. */
+export interface ReportColumn {
+  key: string;
+  label: string;
+  numeric?: boolean;
+  money?: boolean;
+  percent?: boolean;
+  date?: boolean;
+}
+
+export type ReportRow = Record<string, unknown>;
+
+export interface ReportResult {
+  key: string;
+  label: string;
+  description: string;
+  generatedAt: string;
+  filters: Record<string, string | number | null>;
+  columns: ReportColumn[];
+  items: ReportRow[];
+  totals: Record<string, number | null>;
+  /** Present only on the reports that carry a secondary table. */
+  buckets?: { key: string; label: string; count: number; amount: number }[];
+  lines?: ReportRow[];
+  chapters?: ReportRow[];
+  turnaround?: ReportRow[];
+  officers?: ReportRow[];
+}
+
+/** One movement of a Schedule of Rates line. */
+export interface SrHistoryEntry {
+  id: number;
+  srItemId: number | null;
+  code: string;
+  name: string;
+  chapter: string | null;
+  uom: string | null;
+  changeKind: string;
+  oldRate: number | null;
+  newRate: number | null;
+  changeAmount: number | null;
+  changePercent: number | null;
+  oldSrYear: string | null;
+  newSrYear: string | null;
+  oldStatus: string | null;
+  newStatus: string | null;
+  effectiveDate: string | null;
+  govtReference: string | null;
+  remarks: string | null;
+  changedBy: string | null;
+  changedAt: string;
 }
 
 // --- Bills -----------------------------------------------------------------

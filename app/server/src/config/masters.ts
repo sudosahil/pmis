@@ -361,7 +361,7 @@ export const MASTER_DEFINITIONS: MasterDefinition[] = [
     singular: 'Schedule of Rates item',
     group: 'Finance',
     description:
-      'The departmental Schedule of Rates. Every agreement item is priced against one of these, so an agreed rate can be compared with the sanctioned rate.',
+      'The departmental Schedule of Rates — the approved baseline price for every item of work. Estimates are priced from it, a bid may not be quoted above it, and running bills are verified against it. Every change to a rate is kept on record.',
     orderBy: 'code',
     searchColumns: ['code', 'name', 'chapter'],
     fields: [
@@ -371,6 +371,13 @@ export const MASTER_DEFINITIONS: MasterDefinition[] = [
       { column: 'uom', label: 'Unit', type: 'text', required: true, inList: true, maxLength: 20 },
       { column: 'rate', label: 'Rate', type: 'money', required: true, inList: true },
       { column: 'sr_year', label: 'SR Edition', type: 'text', required: true, inList: true, help: 'e.g. 2024-25' },
+      { column: 'effective_date', label: 'Effective Date', type: 'date', help: 'When this rate took effect' },
+      {
+        column: 'govt_reference',
+        label: 'Govt. Reference',
+        type: 'text',
+        help: 'The circular or order that authorised this rate. Recorded against the change.',
+      },
       STATUS_FIELD,
     ],
   },

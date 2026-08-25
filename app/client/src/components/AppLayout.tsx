@@ -69,6 +69,12 @@ const NAV: NavGroup[] = [
     ],
   },
   {
+    title: 'Analytics',
+    items: [
+      { to: '/reports', label: 'Reports & MIS', icon: <ChartIcon />, permission: 'reports.view' },
+    ],
+  },
+  {
     title: 'Administration',
     items: [
       { to: '/masters', label: 'Master data', icon: <SettingsIcon />, permission: 'masters.view' },

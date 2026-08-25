@@ -160,6 +160,7 @@ export function copyFromTender(tenderId: number, bidId: number, packageId: numbe
   const rows = db
     .prepare(
       `SELECT t.sl_no, t.item_code, t.description, t.uom, t.quantity,
+              t.sr_item_id, t.sr_rate,
               COALESCE(bi.quoted_rate, t.estimated_rate) AS agreed_rate
          FROM tender_boq_items t
          LEFT JOIN bid_items bi ON bi.boq_item_id = t.id AND bi.bid_id = ?
@@ -172,21 +173,29 @@ export function copyFromTender(tenderId: number, bidId: number, packageId: numbe
     description: string;
     uom: string;
     quantity: number;
+    sr_item_id: number | null;
+    sr_rate: number;
     agreed_rate: number;
   }[];
 
   db.prepare(`DELETE FROM package_boq_items WHERE package_id = ?`).run(packageId);
 
   for (const row of rows) {
-    // The SR line is matched on item code where the tender carried one, so the
-    // agreed rate can be read against the sanctioned rate from day one.
-    const sr = row.item_code
-      ? (db
-          .prepare<[string], { id: number; rate: number }>(
-            `SELECT id, rate FROM schedule_of_rates WHERE code = ? AND status = 'ACTIVE'`,
-          )
-          .get(row.item_code) ?? null)
-      : null;
+    // The tender line already carries the Schedule of Rates line it was priced
+    // from and the rate as it stood then, so the agreement inherits both and
+    // the agreed rate can be read against the sanctioned rate from day one. A
+    // tender raised before that — or an off-schedule item — falls back to
+    // matching on the item code.
+    const sr =
+      row.sr_item_id && row.sr_rate > 0
+        ? { id: row.sr_item_id, rate: row.sr_rate }
+        : row.item_code
+          ? (db
+              .prepare<[string], { id: number; rate: number }>(
+                `SELECT id, rate FROM schedule_of_rates WHERE code = ? AND status = 'ACTIVE'`,
+              )
+              .get(row.item_code) ?? null)
+          : null;
 
     insertItem({
       package_id: packageId,

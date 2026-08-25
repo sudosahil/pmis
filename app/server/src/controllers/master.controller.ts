@@ -33,9 +33,14 @@ export function getOne(req: Request, res: Response): void {
   ok(res, masterService.getOne(req.params.key!, Number(req.params.id)));
 }
 
+/** Everything that has ever happened to one Schedule of Rates line. */
+export function history(req: Request, res: Response): void {
+  ok(res, masterService.history(req.params.key!, Number(req.params.id)));
+}
+
 export function create(req: Request, res: Response): void {
   const key = req.params.key!;
-  const record = masterService.create(key, req.body);
+  const record = masterService.create(key, req.body, req.user);
   insertAuditEntry({
     userId: req.user?.id,
     action: 'MASTER_CREATED',
@@ -50,7 +55,7 @@ export function create(req: Request, res: Response): void {
 export function update(req: Request, res: Response): void {
   const key = req.params.key!;
   const id = Number(req.params.id);
-  const record = masterService.update(key, id, req.body);
+  const record = masterService.update(key, id, req.body, req.user);
   insertAuditEntry({
     userId: req.user?.id,
     action: 'MASTER_UPDATED',
@@ -65,7 +70,7 @@ export function update(req: Request, res: Response): void {
 export function remove(req: Request, res: Response): void {
   const key = req.params.key!;
   const id = Number(req.params.id);
-  masterService.remove(key, id);
+  masterService.remove(key, id, req.user);
   insertAuditEntry({
     userId: req.user?.id,
     action: 'MASTER_DELETED',

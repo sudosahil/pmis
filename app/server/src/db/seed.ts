@@ -711,14 +711,16 @@ function seedContractors(ids: Ids): Ids {
  * against the sanctioned rate — which is the comparison the department actually
  * makes when scrutinising a bill.
  */
-function seedRatesAndBoq(pkgs: { pkgRoadId: number; pkgWaterId: number }): void {
+export type SrIds = Record<string, { id: number; rate: number; uom: string; name: string }>;
+
+function seedRatesAndBoq(pkgs: { pkgRoadId: number; pkgWaterId: number }): SrIds {
   const db = getDb();
   const already = db.prepare(`SELECT COUNT(*) AS n FROM schedule_of_rates`).get() as { n: number };
-  if (already.n > 0) return;
+  if (already.n > 0) return readSrIds();
 
   const insertSr = db.prepare(
-    `INSERT INTO schedule_of_rates (code, name, chapter, uom, rate, sr_year)
-     VALUES (?, ?, ?, ?, ?, '2024-25')`,
+    `INSERT INTO schedule_of_rates (code, name, chapter, uom, rate, sr_year, effective_date, govt_reference)
+     VALUES (?, ?, ?, ?, ?, '2024-25', '2024-04-01', 'PWD/SR/2024-25/CIRC-01')`,
   );
 
   // code, item of work, chapter, unit, rate in rupees
@@ -739,11 +741,13 @@ function seedRatesAndBoq(pkgs: { pkgRoadId: number; pkgWaterId: number }): void 
     ['7.9.3', 'Hydraulic testing and disinfection of laid pipeline', 'Pipeline', 'rmt', 62],
     ['9.4.2', 'Providing and fixing MS railing, painted, as per drawing', 'Miscellaneous', 'rmt', 1_240],
   ];
-  const srIds: Record<string, { id: number; rate: number }> = {};
+  const srIds: SrIds = {};
   for (const [code, name, chapter, uom, rate] of rates) {
     const id = Number(insertSr.run(code, name, chapter, uom, toPaise(rate)).lastInsertRowid);
-    srIds[code] = { id, rate: toPaise(rate) };
+    srIds[code] = { id, rate: toPaise(rate), uom, name };
   }
+
+  seedRateHistory(rates, srIds);
 
   const insertBoq = db.prepare(
     `INSERT INTO package_boq_items
@@ -798,6 +802,86 @@ function seedRatesAndBoq(pkgs: { pkgRoadId: number; pkgWaterId: number }): void 
     ['7.9.3', 14_700, 64],
     ['5.3.2', 380, 5_310],
   ]);
+
+  return srIds;
+}
+
+/** The rate book as it stands, for a run against an already-seeded database. */
+function readSrIds(): SrIds {
+  const rows = getDb()
+    .prepare(`SELECT code, id, rate, uom, name FROM schedule_of_rates`)
+    .all() as { code: string; id: number; rate: number; uom: string; name: string }[];
+  return Object.fromEntries(
+    rows.map((row) => [row.code, { id: row.id, rate: row.rate, uom: row.uom, name: row.name }]),
+  );
+}
+
+/**
+ * How the rate book got to where it is.
+ *
+ * The 2024-25 edition is the baseline, and a mid-year escalation order revised
+ * the bitumen and steel rates upward — the kind of movement that happens when
+ * commodity prices run ahead of a schedule fixed a year earlier, and exactly
+ * the situation that forces a department to permit bidding above the schedule.
+ * Without this the change-history report would open on an empty screen.
+ */
+function seedRateHistory(
+  rates: [string, string, string, string, number][],
+  srIds: SrIds,
+): void {
+  const db = getDb();
+  const insert = db.prepare(
+    `INSERT INTO schedule_of_rate_history
+       (sr_item_id, sr_code, sr_name, chapter, uom, change_kind, old_rate, new_rate,
+        old_sr_year, new_sr_year, old_status, new_status, effective_date, govt_reference,
+        remarks, changed_by, changed_by_name, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+  );
+
+  const byCode = new Map(rates.map((rate) => [rate[0], rate]));
+  const CHIEF = 'Er. Anil Sharma';
+
+  // The edition itself: every item entered when the 2024-25 schedule was adopted.
+  for (const [code, name, chapter, uom] of rates) {
+    insert.run(
+      srIds[code]!.id, code, name, chapter, uom, 'CREATED',
+      null, srIds[code]!.rate, null, '2024-25', null, 'ACTIVE',
+      '2024-04-01', 'PWD/SR/2024-25/CIRC-01',
+      'Item adopted with the 2024-25 Schedule of Rates.', CHIEF, '2024-04-01 10:00:00',
+    );
+  }
+
+  /** code, rate before the revision (rupees), when it took effect, why. */
+  const revisions: [string, number, string, string, string][] = [
+    ['4.11.2', 366, '2025-10-01', 'PWD/SR/2025/ESC-14',
+      'Bitumen price escalation — VG-30 landed cost up 12.6% over the quarter.'],
+    ['4.12.6', 309, '2025-10-01', 'PWD/SR/2025/ESC-14',
+      'Bitumen price escalation, applied to the wearing course rate on the same order.'],
+    ['5.9.4', 71_400, '2025-10-01', 'PWD/SR/2025/ESC-14',
+      'TMT steel escalation — mill prices up 9.9% since the edition was fixed.'],
+    ['7.2.7', 3_640, '2026-02-15', 'PWD/SR/2026/ESC-03',
+      'Ductile iron pipe rates revised on the strength of three fresh market quotations.'],
+    ['2.8.4', 618, '2026-02-15', 'PWD/SR/2026/ESC-03',
+      'Explosive and drilling costs revised for hard rock excavation.'],
+  ];
+
+  for (const [code, oldRupees, effective, reference, remarks] of revisions) {
+    const item = byCode.get(code)!;
+    insert.run(
+      srIds[code]!.id, code, item[1], item[2], item[3], 'RATE_REVISED',
+      toPaise(oldRupees), srIds[code]!.rate, '2024-25', '2024-25', 'ACTIVE', 'ACTIVE',
+      effective, reference, remarks, CHIEF, `${effective} 11:30:00`,
+    );
+  }
+
+  // One line withdrawn rather than repriced, so the report shows both kinds.
+  insert.run(
+    srIds['9.4.2']!.id, '9.4.2', byCode.get('9.4.2')![1], 'Miscellaneous', 'rmt', 'STATUS_CHANGED',
+    srIds['9.4.2']!.rate, srIds['9.4.2']!.rate, '2024-25', '2024-25', 'ACTIVE', 'ACTIVE',
+    '2026-04-01', 'PWD/SR/2026/CIRC-09',
+    'Specification reworded to require galvanised sections; rate unchanged.',
+    CHIEF, '2026-04-01 09:15:00',
+  );
 }
 
 function seedWorkspace(ids: Ids, userIds: Ids): void {
@@ -1051,11 +1135,69 @@ function seedDemoRecords(ids: Ids, userIds: Ids, contractorIds: Ids): void {
     ).lastInsertRowid,
   );
 
-  seedTenders(ids, userIds, contractorIds, projectIds, { pkgRoad2Id, pkgBldgId });
-  seedRatesAndBoq({ pkgRoadId, pkgWaterId });
+  // The rate book comes first: estimates are priced from it, tenders take their
+  // ceiling from it, and agreements are read against it.
+  const srIds = seedRatesAndBoq({ pkgRoadId, pkgWaterId });
+  const dprIds = seedDprs(userIds, projectIds, srIds);
+  seedTenders(ids, userIds, contractorIds, projectIds, { pkgRoad2Id, pkgBldgId }, srIds, dprIds);
   seedBills(ids, userIds, contractorIds, projectIds, { pkgRoadId, pkgWaterId });
   seedFunds(ids, userIds, projectIds);
   seedApprovalFlows(userIds, contractorIds);
+  ageWorkflowInstances();
+}
+
+/**
+ * Puts the approval engine's clock in step with the bills it is carrying.
+ *
+ * The workflow rows are written a moment ago, so without this every file would
+ * look as though it arrived today and both the ageing analysis and the pendency
+ * report would read as a department that never keeps anyone waiting. Each
+ * in-flight file is dated from the record it belongs to, and the actions taken
+ * on it are spread across the time since — leaving it sitting at its current
+ * desk for the balance, which is where the delay shows.
+ */
+function ageWorkflowInstances(): void {
+  const db = getDb();
+
+  // Each file inherits the date of the record it carries.
+  for (const [entityType, table] of [
+    ['RA_BILL', 'ra_bills'],
+    ['MISC_BILL', 'misc_bills'],
+  ] as const) {
+    db.prepare(
+      `UPDATE workflow_instances
+          SET created_at = COALESCE(
+                (SELECT e.created_at FROM ${table} e WHERE e.id = workflow_instances.entity_id),
+                created_at)
+        WHERE entity_type = ? AND status = 'IN_PROGRESS'`,
+    ).run(entityType);
+  }
+
+  const instances = db
+    .prepare(
+      `SELECT id, created_at FROM workflow_instances WHERE status = 'IN_PROGRESS'`,
+    )
+    .all() as { id: number; created_at: string }[];
+
+  const setAction = db.prepare(`UPDATE workflow_actions SET created_at = ? WHERE id = ?`);
+
+  for (const instance of instances) {
+    const actions = db
+      .prepare(`SELECT id FROM workflow_actions WHERE instance_id = ? ORDER BY id`)
+      .all(instance.id) as { id: number }[];
+    if (!actions.length) continue;
+
+    const started = new Date(`${instance.created_at.replace(' ', 'T')}Z`).getTime();
+    const elapsed = Date.now() - started;
+    if (!Number.isFinite(elapsed) || elapsed <= 0) continue;
+
+    // The actions fill the first 60% of the wait; the file has been sitting
+    // where it is now for the remaining 40%.
+    actions.forEach((action, index) => {
+      const at = started + (elapsed * 0.6 * (index + 1)) / actions.length;
+      setAction.run(new Date(at).toISOString().replace('T', ' ').slice(0, 19), action.id);
+    });
+  }
 }
 
 /**
@@ -1249,12 +1391,177 @@ function seedApprovalFlows(userIds: Ids, contractorIds: Ids): void {
   }
 }
 
+/**
+ * The Detailed Project Reports, priced item by item from the Schedule of Rates.
+ *
+ * This is where a work actually begins: the estimate is built line by line at
+ * approved rates, contingency and work-charged establishment are added on top,
+ * and the total is what an administrative approval is granted against. Two of
+ * these reports have been approved and converted into tender documents; the
+ * third is still being prepared, which is what most reports look like most of
+ * the time.
+ */
+function seedDprs(userIds: Ids, projectIds: Ids, srIds: SrIds): Ids {
+  const db = getDb();
+  const already = db.prepare(`SELECT COUNT(*) AS n FROM project_dprs`).get() as { n: number };
+  if (already.n > 0) return {};
+
+  const insertDpr = db.prepare(
+    `INSERT INTO project_dprs
+       (project_id, dpr_no, version, title, prepared_by, consultant, estimated_cost,
+        submission_date, scope, justification, sr_edition, items_total, contingency_bps,
+        establishment_bps, status, approved_by, approval_date, remarks, created_by)
+     VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, '2024-25', ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const insertItem = db.prepare(
+    `INSERT INTO project_dpr_items
+       (dpr_id, sl_no, sr_item_id, item_code, description, uom, quantity, rate, sr_rate, amount)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  const CONTINGENCY = toBps(3);
+  const ESTABLISHMENT = toBps(2);
+
+  /**
+   * Prices an estimate at the schedule and books it. The rate is read from the
+   * rate book rather than typed, which is the whole point of an SR estimate.
+   */
+  function addDpr(spec: {
+    projectKey: string;
+    dprNo: string;
+    title: string;
+    preparedBy: string;
+    consultant: string | null;
+    submissionDate: string;
+    scope: string;
+    justification: string;
+    status: string;
+    approvedBy: string | null;
+    approvalDate: string | null;
+    remarks: string | null;
+    /** SR code and quantity — the rate comes from the schedule. */
+    lines: [string, number][];
+  }): number {
+    const priced = spec.lines.map(([code, qty]) => {
+      const sr = srIds[code]!;
+      const quantity = Math.round(qty * 1000);
+      return {
+        code,
+        sr,
+        quantity,
+        amount: Math.round((quantity * sr.rate) / 1000),
+      };
+    });
+    const itemsTotal = priced.reduce((sum, line) => sum + line.amount, 0);
+    const contingency = Math.round((itemsTotal * CONTINGENCY) / 10_000);
+    const establishment = Math.round((itemsTotal * ESTABLISHMENT) / 10_000);
+
+    const dprId = Number(
+      insertDpr.run(
+        projectIds[spec.projectKey]!, spec.dprNo, spec.title,
+        spec.preparedBy, spec.consultant,
+        itemsTotal + contingency + establishment,
+        spec.submissionDate, spec.scope, spec.justification,
+        itemsTotal, CONTINGENCY, ESTABLISHMENT,
+        spec.status, spec.approvedBy, spec.approvalDate, spec.remarks,
+        userIds['ae.reddy']!,
+      ).lastInsertRowid,
+    );
+
+    priced.forEach((line, index) => {
+      insertItem.run(
+        dprId, index + 1, line.sr.id, line.code, line.sr.name, line.sr.uom,
+        line.quantity, line.sr.rate, line.sr.rate, line.amount,
+      );
+    });
+
+    return dprId;
+  }
+
+  const dprIds: Ids = {};
+
+  dprIds.dprRoad = addDpr({
+    projectKey: 'projRoad',
+    dprNo: 'DPR/NGR/2026/011',
+    title: 'Ring road widening — Chainage 6.200 to 12.400 km',
+    preparedBy: 'Er. Divya Reddy, Assistant Engineer',
+    consultant: 'Meridian Infra Consultants Pvt Ltd',
+    submissionDate: '2026-06-18',
+    scope:
+      'Widening of the existing two-lane carriageway to four lanes over 6.2 km, with granular and ' +
+      'bituminous layers to IRC specification, RCC cross drainage at four locations, and safety railing ' +
+      'along the embankment reach.',
+    justification:
+      'The reach carries 18,400 PCU per day against a two-lane design capacity of 10,000. Phase I ' +
+      'has been completed to chainage 6.200 km, and leaving the balance reach unwidened would strand ' +
+      'that investment.',
+    status: 'APPROVED',
+    approvedBy: 'Er. Anil Sharma, Chief Engineer',
+    approvalDate: '2026-07-10',
+    remarks: 'Approved for tendering. Priced against the 2024-25 Schedule of Rates as revised to date.',
+    lines: [
+      ['2.8.1', 48_500], ['2.8.4', 1_200], ['2.14.2', 62_400],
+      ['4.1.3', 4_200], ['4.4.1', 3_600],
+      ['4.11.2', 24_000], ['4.12.6', 24_000],
+      ['5.6.1', 420], ['5.9.4', 32], ['9.4.2', 1_800],
+    ],
+  });
+
+  dprIds.dprBldg = addDpr({
+    projectKey: 'projBldg',
+    dprNo: 'DPR/SGR/2026/004',
+    title: 'Divisional office building, Gandhinagar — G+3 block',
+    preparedBy: 'Er. Rakesh Patel, Executive Engineer',
+    consultant: null,
+    submissionDate: '2026-04-22',
+    scope:
+      'G+3 office block of 2,850 sq.m with structural frame, finishing, plumbing and electrical works, ' +
+      'parking apron and rainwater harvesting.',
+    justification:
+      'The division office presently works from three rented premises at an annual outgo of ₹41 lakh. ' +
+      'The proposed block recovers its cost in rent avoided within eleven years.',
+    status: 'APPROVED',
+    approvedBy: 'Er. Anil Sharma, Chief Engineer',
+    approvalDate: '2026-05-30',
+    remarks: 'Approved. Tendered as a lump sum contract on the strength of this estimate.',
+    lines: [
+      ['2.8.1', 4_600], ['5.3.2', 820], ['5.6.1', 2_150],
+      ['5.9.4', 148], ['9.4.2', 1_250],
+    ],
+  });
+
+  // Still on the preparing engineer's desk — no approval, so nothing to tender.
+  dprIds.dprDrain = addDpr({
+    projectKey: 'projDrain',
+    dprNo: 'DPR/URB/2026/002',
+    title: 'Storm water drain improvement, Devanahalli town',
+    preparedBy: 'Er. Divya Reddy, Assistant Engineer',
+    consultant: null,
+    submissionDate: '2026-08-14',
+    scope:
+      'Reconstruction of 6.8 km of primary and secondary storm water drains in RCC, with desilting ' +
+      'chambers at 200 m intervals.',
+    justification:
+      'Three wards flooded in each of the last two monsoons. The existing masonry drains have lost ' +
+      'section to silt and encroachment and cannot be rehabilitated in place.',
+    status: 'DRAFT',
+    approvedBy: null,
+    approvalDate: null,
+    remarks: 'Quantities being checked against the survey before submission.',
+    lines: [['2.8.1', 12_400], ['5.3.2', 1_850], ['5.6.1', 1_240], ['5.9.4', 86]],
+  });
+
+  return dprIds;
+}
+
 function seedTenders(
   ids: Ids,
   userIds: Ids,
   contractorIds: Ids,
   projectIds: Ids,
   pkgs: { pkgRoad2Id: number; pkgBldgId: number },
+  srIds: SrIds,
+  dprIds: Ids,
 ): void {
   const db = getDb();
 
@@ -1263,84 +1570,252 @@ function seedTenders(
        (tender_no, title, description, project_id, package_id, division_id, tender_type, bid_type,
         estimated_value, emd_amount, tender_fee, completion_period_days, min_registration_class,
         eligibility_criteria, publish_date, bid_start_at, bid_end_at, technical_open_at,
-        financial_open_at, status, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        financial_open_at, status, created_by, dpr_id, sr_ceiling_enforced, sr_ceiling_amount)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)`,
   );
 
-  // A live tender contractors can still bid on.
+  /** The estimate a report was approved at, which is what the tender is worth. */
+  const dprTotal = (key: string): number =>
+    (db.prepare(`SELECT estimated_cost AS c FROM project_dprs WHERE id = ?`)
+      .get(dprIds[key] ?? -1) as { c: number } | undefined)?.c ?? 0;
+
+  /**
+   * Carries an approved report's estimate onto a tender as its bill of
+   * quantities, and freezes the Schedule of Rates ceiling from it. This is the
+   * conversion the department actually performs: nothing is retyped, so the
+   * tender cannot drift from the estimate that was sanctioned.
+   */
+  const insertBoq = db.prepare(
+    `INSERT INTO tender_boq_items
+       (tender_id, sl_no, item_code, description, uom, quantity, estimated_rate, sr_item_id, sr_rate)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  function convertDpr(tenderId: number, dprKey: string): void {
+    const items = db
+      .prepare(
+        `SELECT sl_no, sr_item_id, item_code, description, uom, quantity, rate, sr_rate
+           FROM project_dpr_items WHERE dpr_id = ? ORDER BY sl_no`,
+      )
+      .all(dprIds[dprKey] ?? -1) as {
+      sl_no: number;
+      sr_item_id: number | null;
+      item_code: string | null;
+      description: string;
+      uom: string;
+      quantity: number;
+      rate: number;
+      sr_rate: number;
+    }[];
+
+    let ceiling = 0;
+    for (const item of items) {
+      insertBoq.run(
+        tenderId, item.sl_no, item.item_code, item.description, item.uom,
+        item.quantity, item.rate, item.sr_item_id, item.sr_rate,
+      );
+      ceiling += Math.round((item.quantity * (item.sr_rate || item.rate)) / 1000);
+    }
+
+    db.prepare(`UPDATE tenders SET sr_ceiling_amount = ? WHERE id = ?`).run(ceiling, tenderId);
+    db.prepare(`UPDATE project_dprs SET tender_id = ? WHERE id = ?`).run(tenderId, dprIds[dprKey]!);
+  }
+
+  /** The pre-qualification and technical criteria a tender document adds. */
+  const insertCriterion = db.prepare(
+    `INSERT INTO tender_criteria (tender_id, kind, sl_no, title, requirement, evidence, is_mandatory, max_score)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  function addCriteria(
+    tenderId: number,
+    criteria: [string, string, string, string, number][], // kind, title, requirement, evidence, marks
+  ): void {
+    let pq = 0;
+    let tq = 0;
+    for (const [kind, title, requirement, evidence, marks] of criteria) {
+      insertCriterion.run(
+        tenderId, kind, kind === 'PQ' ? (pq += 1) : (tq += 1),
+        title, requirement, evidence, 1, kind === 'TQ' ? marks : 0,
+      );
+    }
+  }
+
+  // A live tender contractors can still bid on, raised from the approved report.
+  const roadEstimate = dprTotal('dprRoad');
   const openTenderId = Number(
     insertTender.run(
       'DIV-NGR/TEN/2026-27/0001',
       'Ring road widening — Chainage 6.200 to 12.400 km',
-      'Item rate tender for earthwork, granular layers and bituminous surfacing over 6.2 km, including cross drainage works.',
+      'Item rate tender for earthwork, granular layers and bituminous surfacing over 6.2 km, including cross drainage works. Raised from the approved Detailed Project Report DPR/NGR/2026/011.',
       projectIds.projRoad!, pkgs.pkgRoad2Id, ids.divNgr!, 'OPEN', 'ITEM_RATE',
-      toPaise(69_300_000), toPaise(1_386_000), toPaise(11_800), 540, 'Class A',
-      'Minimum average annual turnover of ₹25 crore over the last three financial years. At least one similar road work of ₹28 crore completed in the last five years. Valid Class A registration with the department.',
+      roadEstimate, Math.round(roadEstimate / 50), toPaise(11_800), 540, 'Class A',
+      'Bidders must satisfy every pre-qualification criterion below. Technical bids are marked out of 100 and a bid scoring under 60 is not carried to the financial stage.',
       '2026-08-01', '2026-08-01 10:00:00', '2026-09-30 17:00:00',
       '2026-10-01 11:00:00', '2026-10-08 11:00:00',
-      'PUBLISHED', userIds['ee.kumar']!,
+      'PUBLISHED', userIds['ee.kumar']!, dprIds.dprRoad ?? null,
     ).lastInsertRowid,
   );
+  convertDpr(openTenderId, 'dprRoad');
 
-  const insertBoq = db.prepare(
-    `INSERT INTO tender_boq_items (tender_id, sl_no, item_code, description, uom, quantity, estimated_rate)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  addCriteria(openTenderId, [
+    ['PQ', 'Average annual turnover',
+      'Average annual turnover of at least ₹25 crore over the last three financial years.',
+      'Audited balance sheets, certified by a chartered accountant.', 0],
+    ['PQ', 'Similar work completed',
+      'At least one road work of ₹28 crore or more, completed in the last five years.',
+      'Completion certificate issued by the client department.', 0],
+    ['PQ', 'Registration class',
+      'Valid Class A registration with the department, current on the date of bid opening.',
+      'Registration certificate and its renewal.', 0],
+    ['PQ', 'No adverse standing',
+      'Not blacklisted or debarred by any state or central government body.',
+      'Self-declaration on ₹100 stamp paper.', 0],
+    ['TQ', 'Similar works in the last five years',
+      'Number and value of comparable road widening works completed.',
+      'Completion certificates.', 30],
+    ['TQ', 'Plant and machinery held',
+      'Ownership or firm lease of a hot mix plant, paver finisher, tandem roller and pneumatic tyred roller.',
+      'Invoices, registration books or lease agreements.', 25],
+    ['TQ', 'Technical personnel',
+      'A graduate engineer with ten years of highway experience, and two diploma holders.',
+      'Curricula vitae and appointment letters.', 20],
+    ['TQ', 'Financial standing',
+      'Solvency of at least ₹7 crore and an unutilised bank credit line.',
+      'Banker’s solvency certificate, issued within the last six months.', 15],
+    ['TQ', 'Quality and safety systems',
+      'A documented quality assurance plan and a site safety plan for the work.',
+      'The plans themselves, signed by the authorised signatory.', 10],
+  ]);
+
+  /**
+   * The 2024-25 schedule was fixed before the bitumen and steel escalation of
+   * late 2025, and this reach is bitumen-heavy — so bidding at the schedule
+   * would draw no bids at all. The Chief Engineer has permitted quoting up to
+   * 8% above it, on the same order that revised the rates.
+   */
+  db.prepare(
+    `UPDATE tenders
+        SET above_sr_permitted = 1, above_sr_cap_bps = ?, above_sr_ground = 'PRICE_ESCALATION',
+            above_sr_authority = ?, above_sr_remarks = ?,
+            above_sr_granted_by = ?, above_sr_granted_at = ?
+      WHERE id = ?`,
+  ).run(
+    toBps(8), 'PWD/SR/2026/ESC-03 dated 15 February 2026',
+    'Bitumen and TMT steel have moved ahead of the 2024-25 schedule the estimate was priced from. ' +
+      'Relief of 8% is permitted on this tender so that bids can be invited at a workable price. ' +
+      'Bids above that margin will still be refused.',
+    userIds['ce.sharma']!, '2026-07-28 12:40:00', openTenderId,
   );
-  const boq: [string, string, string, number, number][] = [
-    ['ERW-01', 'Excavation in ordinary soil including disposal within 1 km lead', 'Cu.m', 48_500, 182],
-    ['ERW-02', 'Embankment construction with approved earth, compacted in layers', 'Cu.m', 62_400, 246],
-    ['GSB-01', 'Granular sub-base, Grade III, laid and compacted', 'Cu.m', 18_600, 1_842],
-    ['WMM-01', 'Wet mix macadam laid and compacted to 250 mm thickness', 'Cu.m', 14_200, 2_186],
-    ['DBM-01', 'Dense bituminous macadam, 75 mm, with VG-30 bitumen', 'Cu.m', 6_820, 8_940],
-    ['BC-01', 'Bituminous concrete wearing course, 40 mm', 'Cu.m', 3_640, 10_480],
-    ['DRN-01', 'RCC storm water drain 600 x 600 mm including bedding', 'Metre', 4_200, 3_260],
-    ['SGN-01', 'Retro-reflective cautionary and informatory signage', 'Nos', 180, 8_450],
-  ];
-  boq.forEach((item, index) => {
-    insertBoq.run(
-      openTenderId, index + 1, item[0], item[1], item[2],
-      item[3] * 1000, toPaise(item[4]),
-    );
-  });
 
   // A completed procurement, sitting at financial evaluation with ranked bids.
+  const bldgEstimate = dprTotal('dprBldg');
   const evalTenderId = Number(
     insertTender.run(
       'DIV-SGR/TEN/2026-27/0001',
       'Construction of divisional office building, Gandhinagar',
-      'Lump sum tender for civil, plumbing and electrical works of the G+3 divisional office block.',
+      'Lump sum tender for civil, plumbing and electrical works of the G+3 divisional office block. Raised from the approved Detailed Project Report DPR/SGR/2026/004.',
       projectIds.projBldg!, pkgs.pkgBldgId, ids.divSgr!, 'OPEN', 'LUMPSUM',
-      toPaise(38_500_000), toPaise(770_000), toPaise(11_800), 480, 'Class B',
-      'Minimum average annual turnover of ₹12 crore. At least one building work of ₹15 crore completed in the last five years.',
+      bldgEstimate, Math.round(bldgEstimate / 50), toPaise(11_800), 480, 'Class B',
+      'Bidders must satisfy every pre-qualification criterion below. Technical bids are marked out of 100.',
       '2026-06-15', '2026-06-15 10:00:00', '2026-07-20 17:00:00',
       '2026-07-21 11:00:00', '2026-07-28 11:00:00',
-      'FINANCIAL_EVALUATION', userIds['ee.patel']!,
+      'FINANCIAL_EVALUATION', userIds['ee.patel']!, dprIds.dprBldg ?? null,
     ).lastInsertRowid,
   );
+  convertDpr(evalTenderId, 'dprBldg');
+
+  addCriteria(evalTenderId, [
+    ['PQ', 'Average annual turnover',
+      'Average annual turnover of at least ₹12 crore over the last three financial years.',
+      'Audited balance sheets, certified by a chartered accountant.', 0],
+    ['PQ', 'Similar work completed',
+      'At least one building work of ₹15 crore or more, completed in the last five years.',
+      'Completion certificate issued by the client department.', 0],
+    ['PQ', 'Registration class',
+      'Valid Class B registration or higher with the department.',
+      'Registration certificate and its renewal.', 0],
+    ['TQ', 'Building works in the last five years',
+      'Number and value of comparable G+ structures completed.',
+      'Completion certificates.', 35],
+    ['TQ', 'Technical personnel',
+      'A graduate civil engineer with eight years of building experience, and a site safety officer.',
+      'Curricula vitae and appointment letters.', 25],
+    ['TQ', 'Plant and formwork systems',
+      'Ownership or lease of batching plant capacity and a modular formwork system.',
+      'Invoices or lease agreements.', 20],
+    ['TQ', 'Financial standing',
+      'Solvency of at least ₹4 crore.',
+      'Banker’s solvency certificate, issued within the last six months.', 20],
+  ]);
+
+  const evalCriteria = db
+    .prepare(`SELECT id, kind, sl_no, max_score FROM tender_criteria WHERE tender_id = ? ORDER BY kind, sl_no`)
+    .all(evalTenderId) as { id: number; kind: string; sl_no: number; max_score: number }[];
 
   const insertBid = db.prepare(
     `INSERT INTO bids (bid_no, tender_id, contractor_id, emd_reference, emd_paid, quoted_amount,
-                       variation_bps, technical_score, technical_status, technical_remarks,
+                       variation_bps, sr_ceiling_amount, sr_variation_bps, is_above_sr,
+                       technical_score, technical_status, technical_remarks,
                        financial_status, rank, status, submitted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const insertResponse = db.prepare(
+    `INSERT INTO bid_criteria_responses (bid_id, criterion_id, is_met, score, remarks)
+     VALUES (?, ?, ?, ?, ?)`,
   );
 
-  const estimate = toPaise(38_500_000);
-  const bids: [string, number, number, number, string, string, number | null][] = [
-    ['C-10003', 36_575_000, 88, 1, 'QUALIFIED', 'Meets all turnover and experience criteria.', 1],
-    ['C-10001', 37_730_000, 92, 2, 'QUALIFIED', 'Strong technical capacity; all documents in order.', 2],
-    ['C-10002', 39_655_000, 71, 3, 'QUALIFIED', 'Qualified on the strength of a similar completed work.', 3],
+  const ceilingRow = db
+    .prepare(`SELECT sr_ceiling_amount AS c FROM tenders WHERE id = ?`)
+    .get(evalTenderId) as { c: number };
+  const ceiling = ceilingRow.c || bldgEstimate;
+  const emd = Math.round(bldgEstimate / 50);
+
+  /**
+   * Every bid sits at or below the Schedule of Rates ceiling, which is what the
+   * system now enforces. The technical scores are the totals of the criterion
+   * marks recorded underneath them, not figures typed by the committee.
+   */
+  const bids: [string, number, number, string, string, number, number[]][] = [
+    ['C-10003', 95, 1, 'QUALIFIED', 'Meets every pre-qualification criterion. Strongest on plant and formwork.', 1,
+      [33, 21, 20, 18]],
+    ['C-10001', 98, 2, 'QUALIFIED', 'Strong technical capacity; all documents in order.', 2,
+      [35, 24, 18, 20]],
+    ['C-10002', 100, 3, 'QUALIFIED', 'Qualified on the strength of a single similar completed work.', 3,
+      [26, 19, 14, 16]],
   ];
-  bids.forEach(([code, amount, score, index, status, remarks, rank]) => {
-    const quoted = toPaise(amount);
-    insertBid.run(
-      `DIV-SGR/TEN/2026-27/0001/BID/${String(index).padStart(3, '0')}`,
-      evalTenderId, contractorIds[code]!,
-      `EMD/${code}/2026/${index}`, toPaise(770_000), quoted,
-      Math.round(((quoted - estimate) / estimate) * 10_000),
-      score, status, remarks, 'EVALUATED', rank, 'TECHNICALLY_QUALIFIED',
-      `2026-07-${String(14 + index).padStart(2, '0')} 15:${String(20 + index * 7)}:00`,
+
+  bids.forEach(([code, quotePercent, index, status, remarks, rank, marks]) => {
+    // Quoted as a percentage of the ceiling, so no seeded bid breaches it.
+    const quoted = Math.round((ceiling * quotePercent) / 100);
+    const score = marks.reduce((sum, mark) => sum + mark, 0);
+
+    const bidId = Number(
+      insertBid.run(
+        `DIV-SGR/TEN/2026-27/0001/BID/${String(index).padStart(3, '0')}`,
+        evalTenderId, contractorIds[code]!,
+        `EMD/${code}/2026/${index}`, emd, quoted,
+        bldgEstimate > 0 ? Math.round(((quoted - bldgEstimate) / bldgEstimate) * 10_000) : 0,
+        ceiling, ceiling > 0 ? Math.round(((quoted - ceiling) / ceiling) * 10_000) : 0,
+        quoted > ceiling ? 1 : 0,
+        score, status, remarks, 'EVALUATED', rank, 'TECHNICALLY_QUALIFIED',
+        `2026-07-${String(14 + index).padStart(2, '0')} 15:${String(20 + index * 7)}:00`,
+      ).lastInsertRowid,
     );
+
+    // Pre-qualification is pass or fail; the technical criteria carry the marks.
+    for (const criterion of evalCriteria.filter((c) => c.kind === 'PQ')) {
+      insertResponse.run(bidId, criterion.id, 1, 0, 'Documents verified.');
+    }
+    evalCriteria
+      .filter((c) => c.kind === 'TQ')
+      .forEach((criterion, position) => {
+        const mark = marks[position] ?? 0;
+        insertResponse.run(
+          bidId, criterion.id, 1, mark,
+          `${mark} of ${criterion.max_score} on the evidence produced.`,
+        );
+      });
   });
 }
 
@@ -1632,7 +2107,28 @@ function seedBills(
     waterDeduction, waterGross - waterDeduction, waterBillId,
   );
 
+  // Bills inserted a moment ago all look a day old, which would make the ageing
+  // analysis read as though nothing in the department ever waits. Backdating
+  // the unsettled ones puts them across the register's buckets, which is what
+  // an office actually looks like.
+  backdate('ra_bills', billIds[1]!, 34);
+  backdate('ra_bills', billIds[2]!, 71);
+  backdate('ra_bills', waterBillId, 118);
+
   seedMiscBills(ids, userIds, projectIds);
+
+  // The one miscellaneous bill still under approval has been waiting a while.
+  const pendingMisc = db
+    .prepare(`SELECT id FROM misc_bills WHERE status = 'IN_APPROVAL' ORDER BY id LIMIT 1`)
+    .get() as { id: number } | undefined;
+  if (pendingMisc) backdate('misc_bills', pendingMisc.id, 52);
+}
+
+/** Moves a row's creation date back, so ageing figures mean something. */
+function backdate(table: string, id: number, days: number): void {
+  getDb()
+    .prepare(`UPDATE ${table} SET created_at = datetime('now', ?) WHERE id = ?`)
+    .run(`-${days} days`, id);
 }
 
 function seedMiscBills(ids: Ids, userIds: Ids, projectIds: Ids): void {

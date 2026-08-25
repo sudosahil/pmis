@@ -16,6 +16,16 @@ export interface TenderRow {
   completion_period_days: number;
   min_registration_class: string | null;
   eligibility_criteria: string | null;
+  dpr_id: number | null;
+  sr_ceiling_enforced: number;
+  sr_ceiling_amount: number;
+  above_sr_permitted: number;
+  above_sr_cap_bps: number;
+  above_sr_ground: string | null;
+  above_sr_authority: string | null;
+  above_sr_remarks: string | null;
+  above_sr_granted_by: number | null;
+  above_sr_granted_at: string | null;
   publish_date: string | null;
   bid_start_at: string | null;
   bid_end_at: string | null;
@@ -37,6 +47,9 @@ export interface TenderDetailRow extends TenderRow {
   circle_id: number;
   zone_id: number;
   created_by_name: string | null;
+  above_sr_granted_by_name: string | null;
+  dpr_no: string | null;
+  dpr_version: number | null;
   bid_count: number;
   submitted_bid_count: number;
 }
@@ -47,6 +60,8 @@ const DETAIL_SELECT = `
          pk.package_code,
          d.code AS division_code, d.name AS division_name,
          u.full_name AS created_by_name,
+         g.full_name AS above_sr_granted_by_name,
+         dpr.dpr_no, dpr.version AS dpr_version,
          (SELECT COUNT(*) FROM bids b WHERE b.tender_id = t.id) AS bid_count,
          (SELECT COUNT(*) FROM bids b WHERE b.tender_id = t.id AND b.status != 'DRAFT')
            AS submitted_bid_count
@@ -55,6 +70,8 @@ const DETAIL_SELECT = `
   JOIN divisions d ON d.id = t.division_id
   LEFT JOIN packages pk ON pk.id = t.package_id
   LEFT JOIN users u ON u.id = t.created_by
+  LEFT JOIN users g ON g.id = t.above_sr_granted_by
+  LEFT JOIN project_dprs dpr ON dpr.id = t.dpr_id
 `;
 
 export function findById(id: number): TenderDetailRow | null {
@@ -159,24 +176,34 @@ export interface BoqItemRow {
   uom: string;
   quantity: number;
   estimated_rate: number;
+  sr_item_id: number | null;
+  sr_rate: number;
+  sr_code: string | null;
+  sr_name: string | null;
 }
 
 export function listBoqItems(tenderId: number): BoqItemRow[] {
   return getDb()
-    .prepare(`SELECT * FROM tender_boq_items WHERE tender_id = ? ORDER BY sl_no`)
+    .prepare(
+      `SELECT b.*, sr.code AS sr_code, sr.name AS sr_name
+         FROM tender_boq_items b
+         LEFT JOIN schedule_of_rates sr ON sr.id = b.sr_item_id
+        WHERE b.tender_id = ? ORDER BY b.sl_no`,
+    )
     .all(tenderId) as BoqItemRow[];
 }
 
 export function replaceBoqItems(
   tenderId: number,
-  items: Omit<BoqItemRow, 'id' | 'tender_id'>[],
+  items: Omit<BoqItemRow, 'id' | 'tender_id' | 'sr_code' | 'sr_name'>[],
 ): void {
   const db = getDb();
   db.transaction(() => {
     db.prepare(`DELETE FROM tender_boq_items WHERE tender_id = ?`).run(tenderId);
     const stmt = db.prepare(
-      `INSERT INTO tender_boq_items (tender_id, sl_no, item_code, description, uom, quantity, estimated_rate)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tender_boq_items
+         (tender_id, sl_no, item_code, description, uom, quantity, estimated_rate, sr_item_id, sr_rate)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     items.forEach((item, index) => {
       stmt.run(
@@ -187,8 +214,118 @@ export function replaceBoqItems(
         item.uom,
         item.quantity,
         item.estimated_rate,
+        item.sr_item_id ?? null,
+        item.sr_rate ?? 0,
       );
     });
+  })();
+}
+
+// --- Qualification criteria --------------------------------------------------
+
+export interface CriterionRow {
+  id: number;
+  tender_id: number;
+  kind: string;
+  sl_no: number;
+  title: string;
+  requirement: string;
+  evidence: string | null;
+  is_mandatory: number;
+  max_score: number;
+}
+
+export function listCriteria(tenderId: number): CriterionRow[] {
+  return getDb()
+    .prepare(
+      `SELECT * FROM tender_criteria WHERE tender_id = ?
+        ORDER BY CASE kind WHEN 'PQ' THEN 0 ELSE 1 END, sl_no`,
+    )
+    .all(tenderId) as CriterionRow[];
+}
+
+export function replaceCriteria(
+  tenderId: number,
+  items: Omit<CriterionRow, 'id' | 'tender_id'>[],
+): void {
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare(`DELETE FROM tender_criteria WHERE tender_id = ?`).run(tenderId);
+    const stmt = db.prepare(
+      `INSERT INTO tender_criteria (tender_id, kind, sl_no, title, requirement, evidence, is_mandatory, max_score)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const item of items) {
+      stmt.run(
+        tenderId,
+        item.kind,
+        item.sl_no,
+        item.title,
+        item.requirement,
+        item.evidence,
+        item.is_mandatory,
+        item.max_score,
+      );
+    }
+  })();
+}
+
+export function countCriteria(tenderId: number): { pq: number; tq: number; tqMaxScore: number } {
+  const row = getDb()
+    .prepare<[number], { pq: number; tq: number; tq_max: number | null }>(
+      `SELECT
+         SUM(CASE WHEN kind = 'PQ' THEN 1 ELSE 0 END) AS pq,
+         SUM(CASE WHEN kind = 'TQ' THEN 1 ELSE 0 END) AS tq,
+         SUM(CASE WHEN kind = 'TQ' THEN max_score ELSE 0 END) AS tq_max
+       FROM tender_criteria WHERE tender_id = ?`,
+    )
+    .get(tenderId);
+  return { pq: row?.pq ?? 0, tq: row?.tq ?? 0, tqMaxScore: row?.tq_max ?? 0 };
+}
+
+// --- Criterion responses -----------------------------------------------------
+
+export interface CriterionResponseRow {
+  id: number;
+  bid_id: number;
+  criterion_id: number;
+  is_met: number;
+  score: number;
+  remarks: string | null;
+  kind: string;
+  sl_no: number;
+  title: string;
+  requirement: string;
+  max_score: number;
+  is_mandatory: number;
+}
+
+export function listCriterionResponses(bidId: number): CriterionResponseRow[] {
+  return getDb()
+    .prepare(
+      `SELECT r.*, c.kind, c.sl_no, c.title, c.requirement, c.max_score, c.is_mandatory
+         FROM bid_criteria_responses r
+         JOIN tender_criteria c ON c.id = r.criterion_id
+        WHERE r.bid_id = ?
+        ORDER BY CASE c.kind WHEN 'PQ' THEN 0 ELSE 1 END, c.sl_no`,
+    )
+    .all(bidId) as CriterionResponseRow[];
+}
+
+export function replaceCriterionResponses(
+  bidId: number,
+  items: { criterion_id: number; is_met: number; score: number; remarks: string | null }[],
+): void {
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare(`DELETE FROM bid_criteria_responses WHERE bid_id = ?`).run(bidId);
+    const stmt = db.prepare(
+      `INSERT INTO bid_criteria_responses (bid_id, criterion_id, is_met, score, remarks)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    for (const item of items) {
+      stmt.run(bidId, item.criterion_id, item.is_met, item.score, item.remarks);
+    }
   })();
 }
 
@@ -203,6 +340,9 @@ export interface BidRow {
   emd_paid: number;
   quoted_amount: number;
   variation_bps: number;
+  sr_ceiling_amount: number;
+  sr_variation_bps: number;
+  is_above_sr: number;
   technical_score: number | null;
   technical_status: string;
   technical_remarks: string | null;

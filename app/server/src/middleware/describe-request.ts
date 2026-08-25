@@ -32,6 +32,13 @@ const RULES: Rule[] = [
   { method: 'PATCH', pattern: 'projects/:id', phrase: 'Edited project $1' },
   { method: 'POST', pattern: 'projects/:id/submit', phrase: 'Sent project $1 for sanction' },
   { method: '*', pattern: 'projects/:id/milestones', phrase: 'Updated the milestones of project $1' },
+  { method: 'GET', pattern: 'projects/:id/dprs', phrase: 'Read the project reports of project $1' },
+  { method: 'POST', pattern: 'projects/:id/dprs', phrase: 'Prepared a project report for project $1' },
+  { method: 'GET', pattern: 'projects/:id/dprs/:id/items', phrase: 'Read the estimate of project report $2' },
+  { method: 'PUT', pattern: 'projects/:id/dprs/:id/items', phrase: 'Priced the estimate of project report $2' },
+  { method: 'POST', pattern: 'projects/:id/dprs/:id/reprice', phrase: 'Repriced project report $2 against the Schedule of Rates' },
+  { method: 'POST', pattern: 'projects/:id/dprs/:id/convert-to-tender', phrase: 'Converted project report $2 into a tender document' },
+  { method: 'POST', pattern: 'projects/:id/dprs/:id/decision', phrase: 'Decided project report $2' },
   { method: 'GET', pattern: 'packages', phrase: 'Browsed packages' },
   { method: 'POST', pattern: 'packages', phrase: 'Created a package' },
   { method: 'GET', pattern: 'packages/:id', phrase: 'Opened package $1' },
@@ -46,6 +53,10 @@ const RULES: Rule[] = [
   { method: 'POST', pattern: 'tenders/:id/publish', phrase: 'Published tender $1' },
   { method: 'POST', pattern: 'tenders/:id/bids', phrase: 'Submitted a bid on tender $1' },
   { method: 'POST', pattern: 'tenders/:id/award', phrase: 'Awarded tender $1' },
+  { method: 'GET', pattern: 'tenders/:id/criteria', phrase: 'Read the qualification criteria of tender $1' },
+  { method: 'PUT', pattern: 'tenders/:id/criteria', phrase: 'Set the qualification criteria of tender $1' },
+  { method: 'POST', pattern: 'tenders/:id/sr-relief', phrase: 'Permitted bidding above the Schedule of Rates on tender $1' },
+  { method: 'DELETE', pattern: 'tenders/:id/sr-relief', phrase: 'Restored the Schedule of Rates ceiling on tender $1' },
   { method: 'POST', pattern: 'tenders/:id/*', phrase: 'Acted on tender $1' },
   { method: '*', pattern: 'contractors/register', phrase: 'Registered a contractor firm' },
   { method: 'GET', pattern: 'contractors', phrase: 'Browsed contractors' },
@@ -125,6 +136,7 @@ const RULES: Rule[] = [
   // Administration
   { method: 'GET', pattern: 'masters/definitions', phrase: 'Viewed the master data catalogue' },
   { method: 'GET', pattern: 'masters/*/options', phrase: 'Loaded a dropdown' },
+  { method: 'GET', pattern: 'masters/*/:id/history', phrase: 'Read the change history of master record $1' },
   { method: 'GET', pattern: 'masters/*', phrase: 'Browsed a master list' },
   { method: 'POST', pattern: 'masters/*', phrase: 'Added a master record' },
   { method: 'PATCH', pattern: 'masters/*/:id', phrase: 'Edited master record $1' },
@@ -137,6 +149,15 @@ const RULES: Rule[] = [
   { method: 'POST', pattern: 'users/:id/reset-password', phrase: 'Reset the password of user $1' },
   { method: 'GET', pattern: 'audit', phrase: 'Read the audit trail' },
   { method: 'GET', pattern: 'dashboard', phrase: 'Opened the dashboard' },
+
+  // Reports and MIS
+  { method: 'GET', pattern: 'reports', phrase: 'Opened reports' },
+  { method: 'GET', pattern: 'reports/contractor-bills', phrase: 'Ran the contractor-wise billing report' },
+  { method: 'GET', pattern: 'reports/bill-ageing', phrase: 'Ran the bill ageing analysis' },
+  { method: 'GET', pattern: 'reports/boq-analysis', phrase: 'Ran the BOQ analysis' },
+  { method: 'GET', pattern: 'reports/sr-rates', phrase: 'Ran the Schedule of Rates analysis' },
+  { method: 'GET', pattern: 'reports/sr-rate-history', phrase: 'Read the Schedule of Rates change history' },
+  { method: 'GET', pattern: 'reports/approval-analysis', phrase: 'Ran the approval analysis' },
 ];
 
 function matches(pattern: string, segments: string[]): string[] | null {

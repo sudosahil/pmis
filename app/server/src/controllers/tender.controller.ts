@@ -121,3 +121,50 @@ export function award(req: Request, res: Response): void {
     ),
   );
 }
+
+// --- Qualification criteria --------------------------------------------------
+
+export function listCriteria(req: Request, res: Response): void {
+  ok(res, tenderService.listCriteria(Number(req.params.id), requireUser(req)));
+}
+
+export function replaceCriteria(req: Request, res: Response): void {
+  ok(
+    res,
+    tenderService.replaceCriteria(
+      Number(req.params.id),
+      req.body as z.infer<typeof tenderService.replaceCriteriaSchema>,
+      requireUser(req),
+    ),
+  );
+}
+
+// --- The Schedule of Rates ceiling -------------------------------------------
+
+export function grantSrRelief(req: Request, res: Response): void {
+  ok(
+    res,
+    tenderService.grantSrRelief(
+      Number(req.params.id),
+      req.body as z.infer<typeof tenderService.srReliefSchema>,
+      requireUser(req),
+    ),
+  );
+}
+
+export function withdrawSrRelief(req: Request, res: Response): void {
+  ok(res, tenderService.withdrawSrRelief(Number(req.params.id), requireUser(req)));
+}
+
+// --- From report to tender document ------------------------------------------
+
+export function convertDpr(req: Request, res: Response): void {
+  created(
+    res,
+    tenderService.createFromDpr(
+      Number(req.params.dprId),
+      req.body as z.infer<typeof tenderService.convertDprSchema>,
+      requireUser(req),
+    ),
+  );
+}

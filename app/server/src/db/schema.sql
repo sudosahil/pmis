@@ -221,20 +221,60 @@ CREATE INDEX IF NOT EXISTS idx_expense_categories_parent ON expense_categories(p
 
 -- The departmental Schedule of Rates. Every BOQ item is priced against one of
 -- these, so an agreed rate can always be compared with the sanctioned rate.
+-- The Schedule of Rates: the government's approved baseline price for every
+-- item of work. It is what an estimate is priced from, what a bid may not
+-- exceed, and what a running bill is verified against.
 CREATE TABLE IF NOT EXISTS schedule_of_rates (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  code        TEXT NOT NULL UNIQUE,             -- SR item number, e.g. 4.11.2
-  name        TEXT NOT NULL,                    -- the item of work, as printed in the SR
-  chapter     TEXT,                             -- e.g. Earthwork, Concrete, Pipeline
-  uom         TEXT NOT NULL DEFAULT 'Nos',
-  rate        INTEGER NOT NULL DEFAULT 0,       -- paise
-  sr_year     TEXT NOT NULL DEFAULT '2024-25',  -- the SR edition this rate belongs to
-  status      TEXT NOT NULL DEFAULT 'ACTIVE',
-  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  code           TEXT NOT NULL UNIQUE,             -- SR item number, e.g. 4.11.2
+  name           TEXT NOT NULL,                    -- the item of work, as printed in the SR
+  chapter        TEXT,                             -- e.g. Earthwork, Concrete, Pipeline
+  uom            TEXT NOT NULL DEFAULT 'Nos',
+  rate           INTEGER NOT NULL DEFAULT 0,       -- paise
+  sr_year        TEXT NOT NULL DEFAULT '2024-25',  -- the SR edition this rate belongs to
+  effective_date TEXT,                             -- when the rate took effect
+  govt_reference TEXT,                             -- the circular or order that set it
+  status         TEXT NOT NULL DEFAULT 'ACTIVE',
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_schedule_of_rates_chapter ON schedule_of_rates(chapter);
 CREATE INDEX IF NOT EXISTS idx_schedule_of_rates_year ON schedule_of_rates(sr_year);
+
+-- Every movement of a Schedule of Rates line, kept permanently.
+--
+-- A rate is a financial control: an agreement signed against the old rate and a
+-- bid rejected against the new one both have to be explicable years later. So
+-- the row is never simply overwritten — the previous value is written here
+-- first, alongside the circular that authorised the change. The item's code and
+-- name are copied rather than joined, so the history still reads after the
+-- master row itself is gone.
+CREATE TABLE IF NOT EXISTS schedule_of_rate_history (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  sr_item_id     INTEGER REFERENCES schedule_of_rates(id) ON DELETE SET NULL,
+  sr_code        TEXT NOT NULL,
+  sr_name        TEXT NOT NULL,
+  chapter        TEXT,
+  uom            TEXT,
+  change_kind    TEXT NOT NULL,   -- CREATED | RATE_REVISED | EDITION_CHANGED | RENAMED | STATUS_CHANGED | DELETED
+  old_rate       INTEGER,         -- paise; null when the item was created
+  new_rate       INTEGER,         -- paise; null when the item was deleted
+  old_sr_year    TEXT,
+  new_sr_year    TEXT,
+  old_status     TEXT,
+  new_status     TEXT,
+  effective_date TEXT,
+  govt_reference TEXT,
+  remarks        TEXT,
+  changed_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  changed_by_name TEXT,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sr_history_item ON schedule_of_rate_history(sr_item_id);
+CREATE INDEX IF NOT EXISTS idx_sr_history_code ON schedule_of_rate_history(sr_code);
+CREATE INDEX IF NOT EXISTS idx_sr_history_kind ON schedule_of_rate_history(change_kind);
+CREATE INDEX IF NOT EXISTS idx_sr_history_changed_by ON schedule_of_rate_history(changed_by);
 
 CREATE TABLE IF NOT EXISTS contractors (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -594,6 +634,25 @@ CREATE TABLE IF NOT EXISTS tenders (
   completion_period_days INTEGER NOT NULL DEFAULT 180,
   min_registration_class TEXT,
   eligibility_criteria  TEXT,
+  -- The Detailed Project Report this tender was raised from, when it was
+  -- converted rather than typed from nothing.
+  dpr_id                INTEGER REFERENCES project_dprs(id) ON DELETE SET NULL,
+  -- The Schedule of Rates ceiling. A bidder may quote below the baseline but
+  -- not above it, so the ceiling is frozen onto the tender when it publishes
+  -- rather than recomputed at bid time — a later SR revision must not move the
+  -- goalposts under a bid already being prepared.
+  sr_ceiling_enforced   INTEGER NOT NULL DEFAULT 1,
+  sr_ceiling_amount     INTEGER NOT NULL DEFAULT 0,  -- paise
+  -- Relief from that ceiling, granted deliberately and on a stated ground:
+  -- a war, a pandemic or a price shock that postdates the SR edition the
+  -- estimate was priced from. Nothing bypasses the ceiling silently.
+  above_sr_permitted    INTEGER NOT NULL DEFAULT 0,
+  above_sr_cap_bps      INTEGER NOT NULL DEFAULT 0,  -- how far above, in basis points
+  above_sr_ground       TEXT,                        -- WAR | PANDEMIC | PRICE_ESCALATION | NATURAL_CALAMITY | OTHER
+  above_sr_authority    TEXT,                        -- the circular or order granting it
+  above_sr_remarks      TEXT,
+  above_sr_granted_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  above_sr_granted_at   TEXT,
   publish_date          TEXT,
   bid_start_at          TEXT,
   bid_end_at            TEXT,
@@ -623,10 +682,53 @@ CREATE TABLE IF NOT EXISTS tender_boq_items (
   uom             TEXT NOT NULL DEFAULT 'Nos',
   quantity        INTEGER NOT NULL DEFAULT 0,     -- stored x1000 to keep 3 decimals exact
   estimated_rate  INTEGER NOT NULL DEFAULT 0,     -- paise per unit
+  -- The Schedule of Rates line this item is priced from, and that rate as it
+  -- stood when the tender was raised. This is the per-line bidding ceiling.
+  sr_item_id      INTEGER REFERENCES schedule_of_rates(id) ON DELETE SET NULL,
+  sr_rate         INTEGER NOT NULL DEFAULT 0,     -- paise per unit
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_boq_tender ON tender_boq_items(tender_id);
+CREATE INDEX IF NOT EXISTS idx_boq_sr ON tender_boq_items(sr_item_id);
+
+-- Pre-Qualification and Technical Qualification criteria.
+--
+-- A tender document is the Detailed Project Report plus these: the DPR fixes
+-- what is to be built and what it should cost, the criteria fix who is fit to
+-- build it. PQ is pass/fail and screens the bidder before anything is opened;
+-- TQ is scored and decides the technical envelope.
+CREATE TABLE IF NOT EXISTS tender_criteria (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  tender_id     INTEGER NOT NULL REFERENCES tenders(id) ON DELETE CASCADE,
+  kind          TEXT NOT NULL,                   -- PQ | TQ
+  sl_no         INTEGER NOT NULL,
+  title         TEXT NOT NULL,
+  requirement   TEXT NOT NULL,                   -- what the bidder must demonstrate
+  evidence      TEXT,                            -- the document that proves it
+  is_mandatory  INTEGER NOT NULL DEFAULT 1,
+  max_score     INTEGER NOT NULL DEFAULT 0,      -- TQ only; PQ criteria are pass/fail
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (tender_id, kind, sl_no)
+);
+CREATE INDEX IF NOT EXISTS idx_tender_criteria_tender ON tender_criteria(tender_id, kind);
+
+-- How one bid answered one criterion. Written by the evaluation committee, and
+-- what the technical score is totalled from rather than typed.
+CREATE TABLE IF NOT EXISTS bid_criteria_responses (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  bid_id        INTEGER NOT NULL REFERENCES bids(id) ON DELETE CASCADE,
+  criterion_id  INTEGER NOT NULL REFERENCES tender_criteria(id) ON DELETE CASCADE,
+  is_met        INTEGER NOT NULL DEFAULT 0,
+  score         INTEGER NOT NULL DEFAULT 0,
+  remarks       TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (bid_id, criterion_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bid_criteria_bid ON bid_criteria_responses(bid_id);
+CREATE INDEX IF NOT EXISTS idx_bid_criteria_criterion ON bid_criteria_responses(criterion_id);
 
 CREATE TABLE IF NOT EXISTS tender_documents (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -650,6 +752,12 @@ CREATE TABLE IF NOT EXISTS bids (
   emd_paid              INTEGER NOT NULL DEFAULT 0,
   quoted_amount         INTEGER NOT NULL DEFAULT 0,
   variation_bps         INTEGER NOT NULL DEFAULT 0,  -- +/- vs estimate, basis points
+  -- The Schedule of Rates ceiling this bid was accepted against, and whether it
+  -- used the relief granted on the tender. Copied onto the bid so the check
+  -- that let it through stays readable after the tender is amended.
+  sr_ceiling_amount     INTEGER NOT NULL DEFAULT 0,  -- paise
+  sr_variation_bps      INTEGER NOT NULL DEFAULT 0,  -- +/- vs the SR baseline
+  is_above_sr           INTEGER NOT NULL DEFAULT 0,
   technical_score       INTEGER,                     -- 0..100
   technical_status      TEXT NOT NULL DEFAULT 'PENDING', -- PENDING | QUALIFIED | DISQUALIFIED
   technical_remarks     TEXT,
@@ -1144,15 +1252,25 @@ CREATE TABLE IF NOT EXISTS project_dprs (
   title           TEXT NOT NULL,
   prepared_by     TEXT,                          -- the officer or consultancy
   consultant      TEXT,
-  estimated_cost  INTEGER NOT NULL DEFAULT 0,    -- paise
+  estimated_cost  INTEGER NOT NULL DEFAULT 0,    -- paise; the abstract of cost
   submission_date TEXT,
   scope           TEXT,                          -- what the work covers
   justification   TEXT,                          -- why it is needed
+  -- The abstract of cost. The estimate is built line by line from the Schedule
+  -- of Rates edition named here; contingency and work-charged establishment are
+  -- the percentages the department adds on top of the measured items.
+  sr_edition      TEXT,
+  items_total     INTEGER NOT NULL DEFAULT 0,    -- paise; sum of the priced items
+  contingency_bps INTEGER NOT NULL DEFAULT 0,
+  establishment_bps INTEGER NOT NULL DEFAULT 0,
   status          TEXT NOT NULL DEFAULT 'DRAFT', -- DRAFT | SUBMITTED | APPROVED | RETURNED
   approved_by     TEXT,
   approval_date   TEXT,
   remarks         TEXT,
   document_id     INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+  -- Set once the report has been converted into a tender document. A DPR is
+  -- converted once; a revision is a new version, and converts on its own.
+  tender_id       INTEGER REFERENCES tenders(id) ON DELETE SET NULL,
   created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
@@ -1160,6 +1278,34 @@ CREATE TABLE IF NOT EXISTS project_dprs (
 );
 CREATE INDEX IF NOT EXISTS idx_project_dprs_project ON project_dprs(project_id);
 CREATE INDEX IF NOT EXISTS idx_project_dprs_document ON project_dprs(document_id);
+CREATE INDEX IF NOT EXISTS idx_project_dprs_tender ON project_dprs(tender_id);
+
+-- The item-wise estimate the Detailed Project Report is built from.
+--
+-- This is where a DPR is actually prepared: each line names an item of work,
+-- takes its rate from the Schedule of Rates rather than from whoever is filling
+-- in the form, and the quantity times that rate is the abstract of cost. The SR
+-- rate is copied onto the line, so a later revision of the rate book never
+-- rewrites an estimate that has already been sanctioned.
+CREATE TABLE IF NOT EXISTS project_dpr_items (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  dpr_id       INTEGER NOT NULL REFERENCES project_dprs(id) ON DELETE CASCADE,
+  sl_no        INTEGER NOT NULL,
+  sr_item_id   INTEGER REFERENCES schedule_of_rates(id) ON DELETE SET NULL,
+  item_code    TEXT,
+  description  TEXT NOT NULL,
+  uom          TEXT NOT NULL DEFAULT 'Nos',
+  quantity     INTEGER NOT NULL DEFAULT 0,      -- x1000
+  rate         INTEGER NOT NULL DEFAULT 0,      -- paise; what the estimate is priced at
+  sr_rate      INTEGER NOT NULL DEFAULT 0,      -- paise; the SR rate at the time
+  amount       INTEGER NOT NULL DEFAULT 0,      -- paise; quantity x rate
+  remarks      TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (dpr_id, sl_no)
+);
+CREATE INDEX IF NOT EXISTS idx_dpr_items_dpr ON project_dpr_items(dpr_id);
+CREATE INDEX IF NOT EXISTS idx_dpr_items_sr ON project_dpr_items(sr_item_id);
 
 -- Named counters backing project/package/tender/bill code generation.
 CREATE TABLE IF NOT EXISTS sequences (

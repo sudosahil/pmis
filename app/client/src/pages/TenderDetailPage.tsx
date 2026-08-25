@@ -6,7 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { date, dateTime, percent, quantity, relativeTime, rupees, rupeesShort } from '../lib/format';
 import type { BoqItem, TenderDetail } from '../types';
 import {
-  Alert, Button, Card, ChevronRightIcon, DetailItem, GavelIcon, Loading,
+  Alert, Button, Card, Checkbox, ChevronRightIcon, DetailItem, GavelIcon, Loading,
   PageHeader, SendIcon, Select, TextArea, TextInput,
 } from '../components/ui';
 import { DataTable } from '../components/DataTable';
@@ -15,6 +15,7 @@ import { Modal, ConfirmModal } from '../components/Modal';
 import { WorkflowPanel } from '../components/WorkflowPanel';
 import { useToast } from '../components/Toast';
 import { BiddingCountdown } from './TendersPage';
+import { SrCeilingCard, TenderCriteriaPanel } from '../components/TenderCriteria';
 
 export function TenderDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -23,7 +24,7 @@ export function TenderDetailPage() {
   const toast = useToast();
   const queryClient = useQueryClient();
 
-  const [tab, setTab] = useState<'notice' | 'boq' | 'bids' | 'approval'>('notice');
+  const [tab, setTab] = useState<'notice' | 'boq' | 'criteria' | 'bids' | 'approval'>('notice');
   const [dialog, setDialog] = useState<
     null | 'submit' | 'publish' | 'close' | 'cancel' | 'startTech' | 'openFinancial' | 'bid' | 'evaluate' | 'award'
   >(null);
@@ -153,10 +154,25 @@ export function TenderDetailPage() {
         </div>
       )}
 
-      <div className="grid grid--4" style={{ marginBottom: 18 }}>
+      <div className="grid grid--5" style={{ marginBottom: 18 }}>
         <div className="stat stat--accent">
           <div className="stat__label">Estimated value</div>
           <div className="stat__value stat__value--currency">{rupeesShort(t.estimatedValue)}</div>
+        </div>
+        <div className={`stat${t.srCeiling.relief ? ' stat--warn' : ''}`}>
+          <div className="stat__label">Bidding ceiling</div>
+          <div className="stat__value stat__value--currency">
+            {t.srCeiling.enforced ? rupeesShort(t.srCeiling.effectiveAmount) : '—'}
+          </div>
+          <div className="stat__meta">
+            <span>
+              {!t.srCeiling.enforced
+                ? 'Outside the Schedule of Rates'
+                : t.srCeiling.relief
+                  ? `SR + ${percent(t.srCeiling.relief.capPercent)} relief`
+                  : 'At the Schedule of Rates'}
+            </span>
+          </div>
         </div>
         <div className="stat">
           <div className="stat__label">Earnest money</div>
@@ -176,7 +192,7 @@ export function TenderDetailPage() {
       </div>
 
       <div className="tabs" role="tablist">
-        {(['notice', 'boq', 'bids', 'approval'] as const).map((key) => (
+        {(['notice', 'boq', 'criteria', 'bids', 'approval'] as const).map((key) => (
           <button
             key={key}
             type="button"
@@ -187,9 +203,15 @@ export function TenderDetailPage() {
           >
             {key === 'notice' ? 'Tender notice'
               : key === 'boq' ? 'Bill of quantities'
+              : key === 'criteria' ? 'Qualification criteria'
               : key === 'bids' ? (isContractor ? 'My bid' : 'Bids & evaluation')
               : 'Approval'}
             {key === 'boq' ? <span className="tab__count">({t.boqItems.length})</span> : null}
+            {key === 'criteria' ? (
+              <span className="tab__count">
+                ({t.criteria.pq.length + t.criteria.tq.length})
+              </span>
+            ) : null}
             {key === 'bids' && !isContractor ? <span className="tab__count">({t.bids.length})</span> : null}
           </button>
         ))}
@@ -211,6 +233,16 @@ export function TenderDetailPage() {
               <DetailItem label="Technical opening" value={dateTime(t.technicalOpenAt)} />
               <DetailItem label="Financial opening" value={dateTime(t.financialOpenAt)} />
               <DetailItem label="Raised by" value={t.createdBy} />
+              <DetailItem
+                label="Raised from"
+                value={
+                  t.dpr ? (
+                    <Link to={`/projects/${t.project.id}`} className="code">
+                      DPR {t.dpr.dprNo} v{t.dpr.version}
+                    </Link>
+                  ) : null
+                }
+              />
             </div>
             {t.description && (
               <div style={{ marginTop: 18 }}>
@@ -220,6 +252,8 @@ export function TenderDetailPage() {
             )}
           </Card>
 
+          <SrCeilingCard tender={t} />
+
           {t.eligibilityCriteria && (
             <Card title="Eligibility criteria">
               <p style={{ fontSize: 14.5, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{t.eligibilityCriteria}</p>
@@ -227,6 +261,8 @@ export function TenderDetailPage() {
           )}
         </div>
       )}
+
+      {tab === 'criteria' && <TenderCriteriaPanel tender={t} />}
 
       {tab === 'boq' && (
         <Card
@@ -458,6 +494,10 @@ export function TenderDetailPage() {
 
 function BoqTable({ items }: { items: BoqItem[] }) {
   const total = items.reduce((sum, item) => sum + item.estimatedAmount, 0);
+  // The ceiling is per line, so a bidder reading the BOQ has to see it here
+  // rather than work it out from a figure at the top of the page.
+  const hasCeiling = items.some((item) => item.ceilingRate !== null);
+
   return (
     <DataTable
       rows={items}
@@ -465,16 +505,35 @@ function BoqTable({ items }: { items: BoqItem[] }) {
       compact
       columns={[
         { key: 'sl', header: '#', width: '48px', render: (row) => row.slNo },
-        { key: 'code', header: 'Item code', render: (row) => <span className="code">{row.itemCode ?? '—'}</span> },
+        {
+          key: 'code',
+          header: 'SR item',
+          render: (row) => <span className="code">{row.sr?.code ?? row.itemCode ?? '—'}</span>,
+        },
         { key: 'desc', header: 'Description', render: (row) => row.description },
         { key: 'uom', header: 'Unit', render: (row) => row.uom },
         { key: 'qty', header: 'Quantity', numeric: true, render: (row) => quantity(row.quantity) },
-        { key: 'rate', header: 'Rate (₹)', numeric: true, render: (row) => rupees(row.estimatedRate) },
+        { key: 'rate', header: 'Estimated rate (₹)', numeric: true, render: (row) => rupees(row.estimatedRate) },
+        ...(hasCeiling
+          ? [
+              {
+                key: 'ceiling',
+                header: 'Ceiling rate (₹)',
+                numeric: true,
+                render: (row: BoqItem) =>
+                  row.ceilingRate === null ? (
+                    '—'
+                  ) : (
+                    <strong>{rupees(row.ceilingRate)}</strong>
+                  ),
+              },
+            ]
+          : []),
         { key: 'amount', header: 'Amount (₹)', numeric: true, render: (row) => rupees(row.estimatedAmount) },
       ]}
       footer={
         <tr>
-          <td colSpan={6}>Total estimated value</td>
+          <td colSpan={hasCeiling ? 7 : 6}>Total estimated value</td>
           <td className="num">{rupees(total)}</td>
         </tr>
       }
@@ -538,6 +597,7 @@ function BidDialog({ tender, onClose }: { tender: TenderDetail; onClose: () => v
   const [confirming, setConfirming] = useState(false);
 
   const isItemRate = tender.bidType === 'ITEM_RATE';
+  const { srCeiling } = tender;
 
   const total = isItemRate
     ? tender.boqItems.reduce((sum, item) => sum + item.quantity * (Number(rates[item.id]) || 0), 0)
@@ -550,6 +610,21 @@ function BidDialog({ tender, onClose }: { tender: TenderDetail; onClose: () => v
   const allPriced = isItemRate
     ? tender.boqItems.every((item) => Number(rates[item.id]) > 0)
     : total > 0;
+
+  /**
+   * A bidder turned away by a rule they could not see will simply try again, so
+   * the lines that breach the ceiling are called out while the form is being
+   * filled in rather than only when the server refuses the bid.
+   */
+  const overCeiling = isItemRate
+    ? tender.boqItems.filter(
+        (item) => item.ceilingRate !== null && (Number(rates[item.id]) || 0) > item.ceilingRate,
+      )
+    : [];
+
+  const breachesCeiling =
+    srCeiling.enforced &&
+    (isItemRate ? overCeiling.length > 0 : total > srCeiling.effectiveAmount);
 
   const submit = useMutation({
     mutationFn: () =>
@@ -593,7 +668,7 @@ function BidDialog({ tender, onClose }: { tender: TenderDetail; onClose: () => v
             <Button onClick={onClose} disabled={submit.isPending}>Cancel</Button>
             <Button
               variant="primary"
-              disabled={!allPriced || emdReference.trim().length < 3}
+              disabled={!allPriced || breachesCeiling || emdReference.trim().length < 3}
               onClick={() => setConfirming(true)}
             >
               Review and submit
@@ -607,6 +682,41 @@ function BidDialog({ tender, onClose }: { tender: TenderDetail; onClose: () => v
           <Alert variant="warn" title="A bid cannot be changed once submitted">
             Check every rate carefully. Bidding closes {relativeTime(tender.bidEndAt)} — {dateTime(tender.bidEndAt)}.
           </Alert>
+
+          {srCeiling.enforced && (
+            <Alert
+              variant={breachesCeiling ? 'danger' : 'info'}
+              title={
+                srCeiling.relief
+                  ? `You may quote up to ${percent(srCeiling.relief.capPercent)} above the Schedule of Rates`
+                  : 'You may not quote above the Schedule of Rates'
+              }
+            >
+              {srCeiling.relief ? (
+                <p style={{ margin: 0 }}>
+                  The rates this work was estimated at predate{' '}
+                  {srCeiling.relief.groundLabel?.toLowerCase()}, so the department has lifted the
+                  ceiling to <strong>{rupees(srCeiling.effectiveAmount)}</strong> for every bidder
+                  under {srCeiling.relief.authority}. A quote beyond that is still refused.
+                </p>
+              ) : (
+                <p style={{ margin: 0 }}>
+                  The approved government rates put this work at{' '}
+                  <strong>{rupees(srCeiling.baselineAmount)}</strong>. Quote at or below the ceiling
+                  shown against each line — there is no limit on how far below you go.
+                </p>
+              )}
+              {breachesCeiling && (
+                <p style={{ margin: '6px 0 0' }}>
+                  <strong>
+                    {isItemRate
+                      ? `${overCeiling.length} line(s) are above the ceiling and must be brought down before you can submit.`
+                      : 'Your quoted amount is above the ceiling and will be refused.'}
+                  </strong>
+                </p>
+              )}
+            </Alert>
+          )}
 
           <div className="form-grid">
             <TextInput
@@ -632,6 +742,7 @@ function BidDialog({ tender, onClose }: { tender: TenderDetail; onClose: () => v
                       <th style={{ width: 80 }}>Unit</th>
                       <th className="num" style={{ width: 110 }}>Quantity</th>
                       <th className="num" style={{ width: 130 }}>Estimated rate</th>
+                      <th className="num" style={{ width: 130 }}>Ceiling rate</th>
                       <th className="num" style={{ width: 150 }}>Your rate (₹)</th>
                       <th className="num" style={{ width: 140 }}>Amount (₹)</th>
                     </tr>
@@ -639,6 +750,7 @@ function BidDialog({ tender, onClose }: { tender: TenderDetail; onClose: () => v
                   <tbody>
                     {tender.boqItems.map((item) => {
                       const rate = Number(rates[item.id]) || 0;
+                      const over = item.ceilingRate !== null && rate > item.ceilingRate;
                       return (
                         <tr key={item.id}>
                           <td>{item.slNo}</td>
@@ -646,9 +758,14 @@ function BidDialog({ tender, onClose }: { tender: TenderDetail; onClose: () => v
                           <td>{item.uom}</td>
                           <td className="num">{quantity(item.quantity)}</td>
                           <td className="num cell-muted">{rupees(item.estimatedRate)}</td>
+                          <td className="num">
+                            {item.ceilingRate === null
+                              ? '—'
+                              : <strong>{rupees(item.ceilingRate)}</strong>}
+                          </td>
                           <td>
                             <input
-                              className="input input--number"
+                              className={`input input--number${over ? ' has-error' : ''}`}
                               inputMode="decimal"
                               value={rates[item.id] ?? ''}
                               onChange={(event) =>
@@ -656,7 +773,13 @@ function BidDialog({ tender, onClose }: { tender: TenderDetail; onClose: () => v
                               }
                               placeholder="0.00"
                               aria-label={`Your rate for item ${item.slNo}`}
+                              aria-invalid={over || undefined}
                             />
+                            {over && (
+                              <span className="field__error" role="alert">
+                                Above the ceiling of {rupees(item.ceilingRate!)}
+                              </span>
+                            )}
                           </td>
                           <td className="num">{rupees(item.quantity * rate)}</td>
                         </tr>
@@ -665,7 +788,7 @@ function BidDialog({ tender, onClose }: { tender: TenderDetail; onClose: () => v
                   </tbody>
                   <tfoot>
                     <tr>
-                      <td colSpan={6}>Total quoted amount</td>
+                      <td colSpan={7}>Total quoted amount</td>
                       <td className="num">{rupees(total)}</td>
                     </tr>
                   </tfoot>
@@ -687,7 +810,12 @@ function BidDialog({ tender, onClose }: { tender: TenderDetail; onClose: () => v
                 inputMode="decimal"
                 value={quotedAmount}
                 onChange={(event) => setQuotedAmount(event.target.value)}
-                hint={`Department estimate: ${rupees(tender.estimatedValue)}`}
+                hint={
+                  srCeiling.enforced
+                    ? `Department estimate ${rupees(tender.estimatedValue)}; ceiling ${rupees(srCeiling.effectiveAmount)}`
+                    : `Department estimate: ${rupees(tender.estimatedValue)}`
+                }
+                error={breachesCeiling ? 'Above the Schedule of Rates ceiling.' : undefined}
                 full
               />
             </div>
@@ -708,6 +836,12 @@ function BidDialog({ tender, onClose }: { tender: TenderDetail; onClose: () => v
                 <span className="totals__label">Department estimate</span>
                 <span className="totals__value">{rupees(tender.estimatedValue)}</span>
               </div>
+              {srCeiling.enforced && (
+                <div className="totals__row">
+                  <span className="totals__label">Bidding ceiling</span>
+                  <span className="totals__value">{rupees(srCeiling.effectiveAmount)}</span>
+                </div>
+              )}
               <div className="totals__row totals__row--grand">
                 <span className="totals__label">Your quoted amount</span>
                 <span className="totals__value">{rupees(total)}</span>
@@ -732,9 +866,18 @@ function BidDialog({ tender, onClose }: { tender: TenderDetail; onClose: () => v
    Technical evaluation
    ========================================================================== */
 
+/** One bid's answer to one published criterion, while it is being marked. */
+interface CriterionMark {
+  isMet: boolean;
+  score: string;
+}
+
 function EvaluationDialog({ tender, onClose }: { tender: TenderDetail; onClose: () => void }) {
   const toast = useToast();
   const queryClient = useQueryClient();
+  const published = [...tender.criteria.pq, ...tender.criteria.tq];
+  const hasCriteria = published.length > 0;
+
   const [rows, setRows] = useState<Record<number, { status: string; score: string; remarks: string }>>(
     Object.fromEntries(
       tender.bids.map((bid) => [
@@ -747,16 +890,73 @@ function EvaluationDialog({ tender, onClose }: { tender: TenderDetail; onClose: 
       ]),
     ),
   );
+
+  // Marks against the published criteria, where the tender has any. Whatever
+  // the committee marked last time is the starting point.
+  const [marks, setMarks] = useState<Record<number, Record<number, CriterionMark>>>(
+    Object.fromEntries(
+      tender.bids.map((bid) => [
+        bid.id,
+        Object.fromEntries(
+          published.map((criterion) => {
+            const previous = bid.criteria.find((row) => row.criterionId === criterion.id);
+            return [
+              criterion.id,
+              {
+                isMet: previous ? previous.isMet : true,
+                score: String(previous ? previous.score : criterion.maxScore),
+              },
+            ];
+          }),
+        ),
+      ]),
+    ),
+  );
   const [message, setMessage] = useState<string | null>(null);
+
+  const markOf = (bidId: number, criterionId: number): CriterionMark =>
+    marks[bidId]?.[criterionId] ?? { isMet: true, score: '0' };
+
+  const setMark = (bidId: number, criterionId: number, patch: Partial<CriterionMark>) =>
+    setMarks((prev) => ({
+      ...prev,
+      [bidId]: { ...prev[bidId], [criterionId]: { ...markOf(bidId, criterionId), ...patch } },
+    }));
+
+  /** The technical score is the total of the technical marks, not a typed figure. */
+  const derivedScore = (bidId: number) =>
+    tender.criteria.tq.reduce((sum, criterion) => {
+      const mark = markOf(bidId, criterion.id);
+      return sum + (mark.isMet ? Number(mark.score) || 0 : 0);
+    }, 0);
+
+  /** A mandatory pre-qualification criterion missed ends the matter. */
+  const failsMandatory = (bidId: number) =>
+    published.some(
+      (criterion) => criterion.isMandatory && !markOf(bidId, criterion.id).isMet,
+    );
 
   const save = useMutation({
     mutationFn: () =>
       api.post(`/tenders/${tender.id}/technical-evaluation`, {
         evaluations: tender.bids.map((bid) => ({
           bidId: bid.id,
-          technicalStatus: rows[bid.id]!.status,
-          technicalScore: rows[bid.id]!.score ? Number(rows[bid.id]!.score) : undefined,
+          technicalStatus: hasCriteria && failsMandatory(bid.id)
+            ? 'DISQUALIFIED'
+            : rows[bid.id]!.status,
+          technicalScore: hasCriteria
+            ? derivedScore(bid.id)
+            : rows[bid.id]!.score
+              ? Number(rows[bid.id]!.score)
+              : undefined,
           remarks: rows[bid.id]!.remarks || undefined,
+          criteria: hasCriteria
+            ? published.map((criterion) => ({
+                criterionId: criterion.id,
+                isMet: markOf(bid.id, criterion.id).isMet,
+                score: criterion.kind === 'TQ' ? Number(markOf(bid.id, criterion.id).score) || 0 : 0,
+              }))
+            : undefined,
         })),
       }),
     onSuccess: () => {
@@ -791,42 +991,145 @@ function EvaluationDialog({ tender, onClose }: { tender: TenderDetail; onClose: 
       <div className="stack">
         {message && <Alert variant="danger" title="Could not save">{message}</Alert>}
 
-        {tender.bids.map((bid) => (
-          <fieldset className="fieldset" key={bid.id}>
-            <legend className="fieldset__legend">{bid.contractor.name}</legend>
-            <p className="field__hint" style={{ marginBottom: 12 }}>
-              <span className="code">{bid.bidNo}</span> · {bid.contractor.registrationClass ?? 'Unclassified'}
-              {' · '}Submitted {dateTime(bid.submittedAt)} · EMD {bid.emdReference ?? '—'}
-            </p>
-            <div className="form-grid">
-              <Select
-                label="Decision"
-                required
-                value={rows[bid.id]!.status}
-                onChange={(event) => update(bid.id, 'status', event.target.value)}
-                options={[
-                  { value: 'QUALIFIED', label: 'Technically qualified' },
-                  { value: 'DISQUALIFIED', label: 'Disqualified' },
-                ]}
-              />
-              <TextInput
-                label="Technical score (out of 100)"
-                numeric
-                inputMode="numeric"
-                value={rows[bid.id]!.score}
-                onChange={(event) => update(bid.id, 'score', event.target.value)}
-              />
-              <TextArea
-                label="Evaluation note"
-                full
-                rows={2}
-                value={rows[bid.id]!.remarks}
-                onChange={(event) => update(bid.id, 'remarks', event.target.value)}
-                hint="Record which criteria were met or missed. This is auditable."
-              />
-            </div>
-          </fieldset>
-        ))}
+        {hasCriteria && (
+          <Alert variant="info" title="Marked against the published criteria">
+            The technical score is totalled from the marks below rather than typed, and a bid that
+            misses a mandatory criterion is disqualified whatever it scored elsewhere.
+          </Alert>
+        )}
+
+        {tender.bids.map((bid) => {
+          const disqualified = hasCriteria && failsMandatory(bid.id);
+          return (
+            <fieldset className="fieldset" key={bid.id}>
+              <legend className="fieldset__legend">{bid.contractor.name}</legend>
+              <p className="field__hint" style={{ marginBottom: 12 }}>
+                <span className="code">{bid.bidNo}</span> · {bid.contractor.registrationClass ?? 'Unclassified'}
+                {' · '}Submitted {dateTime(bid.submittedAt)} · EMD {bid.emdReference ?? '—'}
+              </p>
+
+              {hasCriteria ? (
+                <div className="stack">
+                  <div className="table-wrap">
+                    <table className="table table--compact">
+                      <caption className="visually-hidden">
+                        Criteria for {bid.contractor.name}
+                      </caption>
+                      <thead>
+                        <tr>
+                          <th scope="col" style={{ width: 60 }}>Type</th>
+                          <th scope="col">Criterion</th>
+                          <th scope="col" style={{ width: 130 }}>Met</th>
+                          <th scope="col" className="num" style={{ width: 130 }}>Marks</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {published.map((criterion) => {
+                          const mark = markOf(bid.id, criterion.id);
+                          return (
+                            <tr key={criterion.id}>
+                              <td>
+                                <span className="code">{criterion.kind}{criterion.slNo}</span>
+                              </td>
+                              <td>
+                                <div className="cell-primary">{criterion.title}</div>
+                                <div className="cell-muted">{criterion.requirement}</div>
+                              </td>
+                              <td>
+                                <Checkbox
+                                  label={mark.isMet ? 'Met' : 'Not met'}
+                                  checked={mark.isMet}
+                                  onChange={(event) =>
+                                    setMark(bid.id, criterion.id, { isMet: event.target.checked })
+                                  }
+                                />
+                                {criterion.isMandatory && !mark.isMet && (
+                                  <div className="cell-muted" style={{ color: 'var(--danger-fg)' }}>
+                                    Mandatory — disqualifies
+                                  </div>
+                                )}
+                              </td>
+                              <td>
+                                {criterion.kind === 'TQ' ? (
+                                  <input
+                                    className="input input--number"
+                                    inputMode="numeric"
+                                    aria-label={`Marks for ${criterion.title}`}
+                                    value={mark.score}
+                                    disabled={!mark.isMet}
+                                    onChange={(event) =>
+                                      setMark(bid.id, criterion.id, { score: event.target.value })
+                                    }
+                                  />
+                                ) : (
+                                  <span className="cell-muted">Pass or fail</span>
+                                )}
+                                {criterion.kind === 'TQ' && (
+                                  <div className="cell-muted">of {criterion.maxScore}</div>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <td colSpan={3} style={{ textAlign: 'right' }}>Technical score</td>
+                          <td className="num">
+                            <strong>{derivedScore(bid.id)}</strong> of {tender.criteria.tqMaxScore}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+
+                  {disqualified && (
+                    <Alert variant="danger" title="This bid fails a mandatory criterion">
+                      It will be recorded as disqualified and will not reach the financial stage.
+                    </Alert>
+                  )}
+
+                  <TextArea
+                    label="Evaluation note"
+                    full
+                    rows={2}
+                    value={rows[bid.id]!.remarks}
+                    onChange={(event) => update(bid.id, 'remarks', event.target.value)}
+                    hint="The committee’s reasoning, in its own words. This is auditable."
+                  />
+                </div>
+              ) : (
+                <div className="form-grid">
+                  <Select
+                    label="Decision"
+                    required
+                    value={rows[bid.id]!.status}
+                    onChange={(event) => update(bid.id, 'status', event.target.value)}
+                    options={[
+                      { value: 'QUALIFIED', label: 'Technically qualified' },
+                      { value: 'DISQUALIFIED', label: 'Disqualified' },
+                    ]}
+                  />
+                  <TextInput
+                    label="Technical score (out of 100)"
+                    numeric
+                    inputMode="numeric"
+                    value={rows[bid.id]!.score}
+                    onChange={(event) => update(bid.id, 'score', event.target.value)}
+                  />
+                  <TextArea
+                    label="Evaluation note"
+                    full
+                    rows={2}
+                    value={rows[bid.id]!.remarks}
+                    onChange={(event) => update(bid.id, 'remarks', event.target.value)}
+                    hint="Record which criteria were met or missed. This is auditable."
+                  />
+                </div>
+              )}
+            </fieldset>
+          );
+        })}
       </div>
     </Modal>
   );

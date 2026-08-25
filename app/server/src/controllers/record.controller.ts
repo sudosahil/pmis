@@ -134,6 +134,27 @@ export function removeDpr(req: Request, res: Response): void {
   noContent(res);
 }
 
+// --- The DPR estimate --------------------------------------------------------
+
+export function listDprItems(req: Request, res: Response): void {
+  ok(res, recordService.listDprItems(Number(req.params.dprId), requireUser(req)));
+}
+
+export function replaceDprItems(req: Request, res: Response): void {
+  ok(
+    res,
+    recordService.replaceDprItems(
+      Number(req.params.dprId),
+      req.body as z.infer<typeof recordService.replaceDprItemsSchema>,
+      requireUser(req),
+    ),
+  );
+}
+
+export function repriceDprItems(req: Request, res: Response): void {
+  ok(res, recordService.repriceDprItems(Number(req.params.dprId), requireUser(req)));
+}
+
 // --- Package progress updates -----------------------------------------------
 
 export function listProgressUpdates(req: Request, res: Response): void {

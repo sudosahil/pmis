@@ -15,7 +15,7 @@ import * as contractorModel from '../models/contractor.model.js';
 import * as userModel from '../models/user.model.js';
 import { insertAuditEntry } from '../models/audit.model.js';
 import { insertManyNotifications } from '../models/notification.model.js';
-import { scopeFilter } from './project.service.js';
+import { assertVisible as assertProjectVisible, scopeFilter } from './project.service.js';
 import { registerOutcomeHandler, startWorkflow } from './workflow.service.js';
 import type { AuthUser } from '../types/auth.js';
 import {
@@ -25,9 +25,10 @@ import {
   generateTenderNo,
   generateWorkOrderNo,
 } from '../utils/codes.js';
+import * as recordModel from '../models/record.model.js';
 import { badRequest, conflict, forbidden, notFound } from '../utils/errors.js';
-import { fromBps, fromQty, lineAmount, toRupees } from '../utils/money.js';
-import { quantity, rupees } from '../middleware/validate.js';
+import { applyBps, formatIndian, fromBps, fromQty, lineAmount, toRupees } from '../utils/money.js';
+import { percent, quantity, rupees } from '../middleware/validate.js';
 
 const dateTime = z
   .string()
@@ -41,6 +42,69 @@ export const boqItemSchema = z.object({
   uom: z.string().trim().min(1).max(20),
   quantity,
   estimatedRate: rupees,
+  /** The Schedule of Rates line this item is priced from — the bidding ceiling. */
+  srItemId: z.coerce.number().int().positive().optional().nullable(),
+});
+
+/** The grounds on which a department may permit a bid above the schedule. */
+export const ABOVE_SR_GROUNDS = [
+  'WAR',
+  'PANDEMIC',
+  'PRICE_ESCALATION',
+  'NATURAL_CALAMITY',
+  'OTHER',
+] as const;
+
+export const ABOVE_SR_GROUND_LABELS: Record<string, string> = {
+  WAR: 'War or armed conflict',
+  PANDEMIC: 'Pandemic',
+  PRICE_ESCALATION: 'Market price escalation since the SR edition',
+  NATURAL_CALAMITY: 'Natural calamity',
+  OTHER: 'Other special consideration',
+};
+
+/**
+ * Relief from the Schedule of Rates ceiling.
+ *
+ * The schedule is a price list fixed at a point in time. When a war, a pandemic
+ * or a price shock postdates the edition an estimate was built from, holding
+ * bidders to it produces no bids at all — so the department may lift the
+ * ceiling by a stated margin. That is a decision, not a workaround: it names a
+ * ground, cites the order granting it, applies to every bidder equally, and is
+ * declared on the tender before bidding rather than claimed by one bidder
+ * afterwards.
+ */
+export const srReliefSchema = z.object({
+  capPercent: percent,
+  ground: z.enum(ABOVE_SR_GROUNDS),
+  authority: z.string().trim().min(3, 'Cite the circular or order permitting this.').max(200),
+  remarks: z.string().trim().max(1000).optional(),
+});
+
+export const criterionSchema = z.object({
+  kind: z.enum(['PQ', 'TQ']),
+  title: z.string().trim().min(3, 'Name the criterion.').max(200),
+  requirement: z.string().trim().min(3, 'State what the bidder must demonstrate.').max(2000),
+  evidence: z.string().trim().max(500).optional(),
+  isMandatory: z.coerce.boolean().default(true),
+  /** Technical criteria are scored; pre-qualification criteria are pass or fail. */
+  maxScore: z.coerce.number().int().min(0).max(100).default(0),
+});
+
+export const replaceCriteriaSchema = z.object({
+  criteria: z.array(criterionSchema).max(60),
+});
+
+/** Turns an approved Detailed Project Report into a draft tender document. */
+export const convertDprSchema = z.object({
+  title: z.string().trim().min(5, 'Enter a tender title.').max(250).optional(),
+  packageId: z.coerce.number().int().positive().optional(),
+  tenderType: z.enum(['OPEN', 'LIMITED', 'EOI', 'GEM', 'SINGLE']).default('OPEN'),
+  bidType: z.enum(['ITEM_RATE', 'PERCENTAGE', 'LUMPSUM']).default('ITEM_RATE'),
+  emdPercent: percent.optional(),
+  tenderFee: rupees.optional(),
+  completionPeriodDays: z.coerce.number().int().min(1).max(3650).default(180),
+  minRegistrationClass: z.enum(['Class A', 'Class B', 'Class C', 'Class D']).optional(),
 });
 
 export const createTenderSchema = z.object({
@@ -56,6 +120,8 @@ export const createTenderSchema = z.object({
   completionPeriodDays: z.coerce.number().int().min(1).max(3650).default(180),
   minRegistrationClass: z.enum(['Class A', 'Class B', 'Class C', 'Class D']).optional(),
   eligibilityCriteria: z.string().trim().max(4000).optional(),
+  /** Off only for a procurement genuinely outside the schedule, e.g. an EOI. */
+  srCeilingEnforced: z.coerce.boolean().default(true),
   bidStartAt: dateTime.optional(),
   bidEndAt: dateTime.optional(),
   technicalOpenAt: dateTime.optional(),
@@ -83,6 +149,22 @@ export const technicalEvaluationSchema = z.object({
         technicalStatus: z.enum(['QUALIFIED', 'DISQUALIFIED']),
         technicalScore: z.coerce.number().int().min(0).max(100).optional(),
         remarks: z.string().trim().max(1000).optional(),
+        /**
+         * How the bid answered each published criterion. Where these are given
+         * the technical score is totalled from them rather than typed, and a
+         * mandatory criterion the bid fails disqualifies it outright.
+         */
+        criteria: z
+          .array(
+            z.object({
+              criterionId: z.coerce.number().int().positive(),
+              isMet: z.coerce.boolean(),
+              score: z.coerce.number().int().min(0).max(100).default(0),
+              remarks: z.string().trim().max(500).optional(),
+            }),
+          )
+          .max(60)
+          .optional(),
       }),
     )
     .min(1),
@@ -98,6 +180,61 @@ export const awardSchema = z.object({
 
 function nowStamp(): string {
   return new Date().toISOString().replace('T', ' ').slice(0, 19);
+}
+
+// --- The Schedule of Rates ceiling -------------------------------------------
+
+/**
+ * A bidder may quote below the government's approved rate but not above it.
+ *
+ * The ceiling for a line is the Schedule of Rates rate the item was priced
+ * from; a line that never matched the schedule falls back to the departmental
+ * estimate, which is the only baseline there is for it. The tender's ceiling is
+ * the sum of its lines, or — for a tender with no bill of quantities — its
+ * estimated value.
+ *
+ * The figure is stored on the tender rather than recomputed at bid time,
+ * because a revision of the rate book must not move the ceiling under a bid
+ * already being prepared.
+ */
+function ceilingRateFor(item: tenderModel.BoqItemRow): number {
+  return item.sr_rate > 0 ? item.sr_rate : item.estimated_rate;
+}
+
+function computeSrCeiling(tenderId: number, estimatedValue: number): number {
+  const boq = tenderModel.listBoqItems(tenderId);
+  if (!boq.length) return estimatedValue;
+  return boq.reduce((sum, item) => sum + lineAmount(item.quantity, ceilingRateFor(item)), 0);
+}
+
+/** The ceiling as it actually applies, once any relief granted is added on. */
+function effectiveCeiling(amount: number, tender: tenderModel.TenderRow): number {
+  if (!tender.above_sr_permitted) return amount;
+  return amount + applyBps(amount, tender.above_sr_cap_bps);
+}
+
+function presentSrCeiling(row: tenderModel.TenderDetailRow) {
+  const base = row.sr_ceiling_amount;
+  const effective = effectiveCeiling(base, row);
+
+  return {
+    enforced: Boolean(row.sr_ceiling_enforced),
+    /** The Schedule of Rates baseline: what the work is worth at approved rates. */
+    baselineAmount: toRupees(base),
+    /** What a bid may actually reach, once relief is counted. */
+    effectiveAmount: toRupees(effective),
+    relief: row.above_sr_permitted
+      ? {
+          capPercent: fromBps(row.above_sr_cap_bps),
+          ground: row.above_sr_ground,
+          groundLabel: ABOVE_SR_GROUND_LABELS[row.above_sr_ground ?? ''] ?? row.above_sr_ground,
+          authority: row.above_sr_authority,
+          remarks: row.above_sr_remarks,
+          grantedBy: row.above_sr_granted_by_name,
+          grantedAt: row.above_sr_granted_at,
+        }
+      : null,
+  };
 }
 
 export function present(row: tenderModel.TenderDetailRow) {
@@ -118,6 +255,11 @@ export function present(row: tenderModel.TenderDetailRow) {
     completionPeriodDays: row.completion_period_days,
     minRegistrationClass: row.min_registration_class,
     eligibilityCriteria: row.eligibility_criteria,
+    srCeiling: presentSrCeiling(row),
+    /** Set when the tender was converted from a Detailed Project Report. */
+    dpr: row.dpr_id
+      ? { id: row.dpr_id, dprNo: row.dpr_no, version: row.dpr_version }
+      : null,
     publishDate: row.publish_date,
     bidStartAt: row.bid_start_at,
     bidEndAt: row.bid_end_at,
@@ -136,7 +278,8 @@ export function present(row: tenderModel.TenderDetailRow) {
   };
 }
 
-function presentBoq(item: tenderModel.BoqItemRow) {
+function presentBoq(item: tenderModel.BoqItemRow, tender: tenderModel.TenderRow) {
+  const ceilingRate = effectiveCeiling(ceilingRateFor(item), tender);
   return {
     id: item.id,
     slNo: item.sl_no,
@@ -146,6 +289,39 @@ function presentBoq(item: tenderModel.BoqItemRow) {
     quantity: fromQty(item.quantity),
     estimatedRate: toRupees(item.estimated_rate),
     estimatedAmount: toRupees(lineAmount(item.quantity, item.estimated_rate)),
+    sr: item.sr_rate > 0
+      ? { id: item.sr_item_id, code: item.sr_code, name: item.sr_name, rate: toRupees(item.sr_rate) }
+      : null,
+    /** The most a bid may quote against this line. */
+    ceilingRate: tender.sr_ceiling_enforced ? toRupees(ceilingRate) : null,
+  };
+}
+
+function presentCriterion(row: tenderModel.CriterionRow) {
+  return {
+    id: row.id,
+    kind: row.kind,
+    slNo: row.sl_no,
+    title: row.title,
+    requirement: row.requirement,
+    evidence: row.evidence,
+    isMandatory: Boolean(row.is_mandatory),
+    maxScore: row.max_score,
+  };
+}
+
+function presentCriterionResponse(row: tenderModel.CriterionResponseRow) {
+  return {
+    criterionId: row.criterion_id,
+    kind: row.kind,
+    slNo: row.sl_no,
+    title: row.title,
+    requirement: row.requirement,
+    isMandatory: Boolean(row.is_mandatory),
+    maxScore: row.max_score,
+    isMet: Boolean(row.is_met),
+    score: row.score,
+    remarks: row.remarks,
   };
 }
 
@@ -178,7 +354,17 @@ function presentBid(row: tenderModel.BidDetailRow, revealFinancials: boolean) {
     submittedAt: row.submitted_at,
     quotedAmount: revealFinancials ? toRupees(row.quoted_amount) : null,
     variation: revealFinancials ? fromBps(row.variation_bps) : null,
+    /** How the bid sat against the approved rates, not against the estimate. */
+    srVariation: revealFinancials ? fromBps(row.sr_variation_bps) : null,
+    srCeilingAmount: revealFinancials ? toRupees(row.sr_ceiling_amount) : null,
+    /**
+     * True when the bid was quoted above the Schedule of Rates baseline under
+     * the relief granted on the tender. Visible before the financial opening,
+     * because it is a fact about how the bid was accepted rather than a price.
+     */
+    isAboveSr: Boolean(row.is_above_sr),
     financialsSealed: !revealFinancials,
+    criteria: tenderModel.listCriterionResponses(row.id).map(presentCriterionResponse),
   };
 }
 
@@ -261,9 +447,19 @@ export function getOne(id: number, user: AuthUser) {
       )
     : tenderModel.listBidsForTender(id);
 
+  const criteria = tenderModel.listCriteria(id).map(presentCriterion);
+
   return {
     ...present(row),
-    boqItems: tenderModel.listBoqItems(id).map(presentBoq),
+    boqItems: tenderModel.listBoqItems(id).map((item) => presentBoq(item, row)),
+    criteria: {
+      pq: criteria.filter((c) => c.kind === 'PQ'),
+      tq: criteria.filter((c) => c.kind === 'TQ'),
+      /** What a bid can score technically, which is what the committee marks out of. */
+      tqMaxScore: criteria
+        .filter((c) => c.kind === 'TQ')
+        .reduce((sum, c) => sum + c.maxScore, 0),
+    },
     bids: bids.map((b) => presentBid(b, reveal || (isContractor && b.status !== 'DRAFT'))),
     award: award
       ? {
@@ -287,6 +483,34 @@ function assertEditable(row: tenderModel.TenderDetailRow): void {
   if (!editable.includes(row.status)) {
     throw conflict('A tender can only be edited while it is a draft.');
   }
+}
+
+/**
+ * Resolves each bill-of-quantities line to the Schedule of Rates line behind
+ * it, and copies that rate onto the line. Chosen explicitly where the form
+ * named an SR item; otherwise matched on the item code, which is how a
+ * department writes a BOQ in practice. The rate is read from the rate book, not
+ * taken from the form.
+ */
+function resolveBoqRows(items: z.infer<typeof boqItemSchema>[]) {
+  return items.map((item, index) => {
+    const sr = item.srItemId
+      ? recordModel.findScheduleOfRatesItem(item.srItemId)
+      : item.itemCode
+        ? recordModel.findScheduleOfRatesItemByCode(item.itemCode)
+        : null;
+
+    return {
+      sl_no: item.slNo ?? index + 1,
+      item_code: item.itemCode ?? sr?.code ?? null,
+      description: item.description,
+      uom: item.uom,
+      quantity: item.quantity,
+      estimated_rate: item.estimatedRate,
+      sr_item_id: sr?.id ?? null,
+      sr_rate: sr?.rate ?? 0,
+    };
+  });
 }
 
 export function create(input: z.infer<typeof createTenderSchema>, user: AuthUser) {
@@ -322,6 +546,7 @@ export function create(input: z.infer<typeof createTenderSchema>, user: AuthUser
       completion_period_days: input.completionPeriodDays,
       min_registration_class: input.minRegistrationClass ?? null,
       eligibility_criteria: input.eligibilityCriteria ?? null,
+      sr_ceiling_enforced: input.srCeilingEnforced ? 1 : 0,
       bid_start_at: input.bidStartAt ?? null,
       bid_end_at: input.bidEndAt ?? null,
       technical_open_at: input.technicalOpenAt ?? null,
@@ -331,18 +556,13 @@ export function create(input: z.infer<typeof createTenderSchema>, user: AuthUser
     });
 
     if (input.boqItems?.length) {
-      tenderModel.replaceBoqItems(
-        id,
-        input.boqItems.map((item, index) => ({
-          sl_no: item.slNo ?? index + 1,
-          item_code: item.itemCode ?? null,
-          description: item.description,
-          uom: item.uom,
-          quantity: item.quantity,
-          estimated_rate: item.estimatedRate,
-        })),
-      );
+      tenderModel.replaceBoqItems(id, resolveBoqRows(input.boqItems));
     }
+    // The ceiling is frozen onto the tender the moment it has something to
+    // compute from, so it cannot drift when the rate book is next revised.
+    tenderModel.updateTender(id, {
+      sr_ceiling_amount: computeSrCeiling(id, input.estimatedValue),
+    });
 
     if (input.packageId) {
       packageModel.updatePackage(input.packageId, { status: PACKAGE_STATUS.TENDERING });
@@ -385,6 +605,7 @@ export function update(id: number, input: z.infer<typeof updateTenderSchema>, us
       completion_period_days: input.completionPeriodDays,
       min_registration_class: input.minRegistrationClass,
       eligibility_criteria: input.eligibilityCriteria,
+      sr_ceiling_enforced: input.srCeilingEnforced === undefined ? undefined : input.srCeilingEnforced ? 1 : 0,
       bid_start_at: input.bidStartAt,
       bid_end_at: input.bidEndAt,
       technical_open_at: input.technicalOpenAt,
@@ -392,18 +613,11 @@ export function update(id: number, input: z.infer<typeof updateTenderSchema>, us
     });
 
     if (input.boqItems) {
-      tenderModel.replaceBoqItems(
-        id,
-        input.boqItems.map((item, index) => ({
-          sl_no: item.slNo ?? index + 1,
-          item_code: item.itemCode ?? null,
-          description: item.description,
-          uom: item.uom,
-          quantity: item.quantity,
-          estimated_rate: item.estimatedRate,
-        })),
-      );
+      tenderModel.replaceBoqItems(id, resolveBoqRows(input.boqItems));
     }
+    tenderModel.updateTender(id, {
+      sr_ceiling_amount: computeSrCeiling(id, input.estimatedValue ?? existing.estimated_value),
+    });
 
     insertAuditEntry({
       userId: user.id,
@@ -479,30 +693,18 @@ export function publish(id: number, user: AuthUser) {
       publish_date: new Date().toISOString().slice(0, 10),
     });
 
-    // Notify every contractor eligible to bid.
-    const eligible = contractorModel.listEligible(tender.min_registration_class);
-    const accounts = eligible
-      .map((c) => ({ contractor: c, account: findContractorAccount(c.id) }))
-      .filter((entry) => entry.account);
-
-    insertManyNotifications(
-      accounts.map(({ account }) => ({
-        userId: account!.id,
-        title: 'New tender published',
-        message: `${tender.tender_no} — ${tender.title}. Bids close ${tender.bid_end_at ?? 'soon'}.`,
-        severity: 'INFO' as const,
-        entityType: ENTITY_TYPES.TENDER,
-        entityId: id,
-        link: `/tenders/${id}`,
-      })),
-    );
+    const notified = notifyEligibleContractors(tender, {
+      title: 'New tender published',
+      message: `${tender.tender_no} — ${tender.title}. Bids close ${tender.bid_end_at ?? 'soon'}.`,
+      severity: 'INFO',
+    });
 
     insertAuditEntry({
       userId: user.id,
       action: 'TENDER_PUBLISHED',
       entityType: ENTITY_TYPES.TENDER,
       entityId: id,
-      detail: `${tender.tender_no} notified to ${accounts.length} contractors`,
+      detail: `${tender.tender_no} notified to ${notified} contractors`,
     });
 
     return getOne(id, user);
@@ -511,6 +713,31 @@ export function publish(id: number, user: AuthUser) {
 
 function findContractorAccount(contractorId: number): { id: number } | null {
   return userModel.findSummaryByContractorId(contractorId);
+}
+
+/** Reaches every contractor eligible to bid. Returns how many were told. */
+function notifyEligibleContractors(
+  tender: tenderModel.TenderDetailRow,
+  notice: { title: string; message: string; severity: 'INFO' | 'WARNING' | 'SUCCESS' },
+): number {
+  const accounts = contractorModel
+    .listEligible(tender.min_registration_class)
+    .map((contractor) => findContractorAccount(contractor.id))
+    .filter((account): account is { id: number } => Boolean(account));
+
+  insertManyNotifications(
+    accounts.map((account) => ({
+      userId: account.id,
+      title: notice.title,
+      message: notice.message,
+      severity: notice.severity,
+      entityType: ENTITY_TYPES.TENDER,
+      entityId: tender.id,
+      link: `/tenders/${tender.id}`,
+    })),
+  );
+
+  return accounts.length;
 }
 
 export function closeBidding(id: number, user: AuthUser) {
@@ -555,7 +782,330 @@ export function cancelTender(id: number, reason: string, user: AuthUser) {
   return getOne(id, user);
 }
 
+// --- Relief from the Schedule of Rates ceiling -------------------------------
+
+/**
+ * Permits bidding above the approved rates on this tender, by a stated margin
+ * and on a stated ground.
+ *
+ * Granted before bidding opens, so every bidder prices against the same
+ * ceiling — relief claimed after the envelopes are in would favour whoever
+ * asked. It is recorded against the officer who granted it and the order that
+ * authorised it, and it appears on the published notice.
+ */
+export function grantSrRelief(id: number, input: z.infer<typeof srReliefSchema>, user: AuthUser) {
+  return transaction(() => {
+    const tender = tenderModel.findById(id);
+    if (!tender) throw notFound('Tender');
+    assertTenderVisible(tender, user);
+
+    if (!tender.sr_ceiling_enforced) {
+      throw conflict('This tender does not enforce the Schedule of Rates ceiling, so there is nothing to relieve.');
+    }
+    const closed: string[] = [
+      TENDER_STATUS.BIDDING_CLOSED,
+      TENDER_STATUS.TECHNICAL_EVALUATION,
+      TENDER_STATUS.FINANCIAL_EVALUATION,
+      TENDER_STATUS.AWARDED,
+      TENDER_STATUS.CANCELLED,
+    ];
+    if (closed.includes(tender.status)) {
+      throw conflict(
+        'Bidding has closed on this tender. Relief has to be granted before bids are invited, ' +
+          'so that every bidder prices against the same ceiling.',
+      );
+    }
+    if (input.capPercent <= 0) {
+      throw badRequest('Enter how far above the Schedule of Rates bidding is permitted.');
+    }
+
+    tenderModel.updateTender(id, {
+      above_sr_permitted: 1,
+      above_sr_cap_bps: input.capPercent,
+      above_sr_ground: input.ground,
+      above_sr_authority: input.authority,
+      above_sr_remarks: input.remarks ?? null,
+      above_sr_granted_by: user.id,
+      above_sr_granted_at: nowStamp(),
+    });
+
+    insertAuditEntry({
+      userId: user.id,
+      action: 'TENDER_ABOVE_SR_PERMITTED',
+      entityType: ENTITY_TYPES.TENDER,
+      entityId: id,
+      detail:
+        `${tender.tender_no}: bidding permitted up to ${fromBps(input.capPercent)}% above the ` +
+        `Schedule of Rates — ${ABOVE_SR_GROUND_LABELS[input.ground]}, per ${input.authority}`,
+    });
+
+    // Bidders already looking at this tender need to know the ceiling moved.
+    if (tender.status === TENDER_STATUS.PUBLISHED) {
+      notifyEligibleContractors(tender, {
+        title: 'Bidding ceiling revised',
+        message:
+          `${tender.tender_no} — bids may now be quoted up to ${fromBps(input.capPercent)}% above ` +
+          `the Schedule of Rates (${ABOVE_SR_GROUND_LABELS[input.ground]}).`,
+        severity: 'WARNING',
+      });
+    }
+
+    return getOne(id, user);
+  });
+}
+
+/** Withdraws relief. Refused once a bid has been priced against it. */
+export function withdrawSrRelief(id: number, user: AuthUser) {
+  return transaction(() => {
+    const tender = tenderModel.findById(id);
+    if (!tender) throw notFound('Tender');
+    assertTenderVisible(tender, user);
+    if (!tender.above_sr_permitted) throw conflict('This tender carries no relief to withdraw.');
+
+    const priced = tenderModel
+      .listBidsForTender(id)
+      .filter((bid) => bid.is_above_sr && bid.status !== 'DRAFT');
+    if (priced.length) {
+      throw conflict(
+        `${priced.length} bid(s) have already been quoted above the Schedule of Rates under this relief. ` +
+          'Cancel the tender instead — withdrawing it now would invalidate bids already submitted.',
+      );
+    }
+
+    tenderModel.updateTender(id, {
+      above_sr_permitted: 0,
+      above_sr_cap_bps: 0,
+      above_sr_ground: null,
+      above_sr_authority: null,
+      above_sr_remarks: null,
+      above_sr_granted_by: null,
+      above_sr_granted_at: null,
+    });
+
+    insertAuditEntry({
+      userId: user.id,
+      action: 'TENDER_ABOVE_SR_WITHDRAWN',
+      entityType: ENTITY_TYPES.TENDER,
+      entityId: id,
+      detail: `${tender.tender_no}: the Schedule of Rates ceiling applies again in full`,
+    });
+
+    return getOne(id, user);
+  });
+}
+
+// --- Qualification criteria ---------------------------------------------------
+
+export function listCriteria(id: number, user: AuthUser) {
+  const tender = tenderModel.findById(id);
+  if (!tender) throw notFound('Tender');
+  assertTenderVisible(tender, user);
+  return tenderModel.listCriteria(id).map(presentCriterion);
+}
+
+/**
+ * Sets the pre-qualification and technical qualification criteria.
+ *
+ * These are what turn a Detailed Project Report into a tender document: the
+ * report says what is to be built and what it should cost, the criteria say who
+ * is fit to build it. They are fixed while the tender is a draft, because a
+ * criterion added after publication changes the terms bidders responded to.
+ */
+export function replaceCriteria(
+  id: number,
+  input: z.infer<typeof replaceCriteriaSchema>,
+  user: AuthUser,
+) {
+  return transaction(() => {
+    const tender = tenderModel.findById(id);
+    if (!tender) throw notFound('Tender');
+    assertTenderVisible(tender, user);
+    assertEditable(tender);
+
+    const tqTotal = input.criteria
+      .filter((c) => c.kind === 'TQ')
+      .reduce((sum, c) => sum + c.maxScore, 0);
+    if (tqTotal > 100) {
+      throw badRequest(
+        `The technical criteria add up to ${tqTotal} marks. A technical score is out of 100.`,
+      );
+    }
+    for (const criterion of input.criteria) {
+      if (criterion.kind === 'TQ' && criterion.maxScore <= 0) {
+        throw badRequest(
+          `"${criterion.title}" is a technical criterion, so it needs marks. ` +
+            'A pass-or-fail requirement belongs under pre-qualification.',
+        );
+      }
+    }
+
+    // Numbered within each kind, the way a tender document lists them.
+    let pq = 0;
+    let tq = 0;
+    tenderModel.replaceCriteria(
+      id,
+      input.criteria.map((criterion) => ({
+        kind: criterion.kind,
+        sl_no: criterion.kind === 'PQ' ? (pq += 1) : (tq += 1),
+        title: criterion.title,
+        requirement: criterion.requirement,
+        evidence: criterion.evidence ?? null,
+        is_mandatory: criterion.isMandatory ? 1 : 0,
+        max_score: criterion.kind === 'TQ' ? criterion.maxScore : 0,
+      })),
+    );
+
+    insertAuditEntry({
+      userId: user.id,
+      action: 'TENDER_CRITERIA_SET',
+      entityType: ENTITY_TYPES.TENDER,
+      entityId: id,
+      detail: `${tender.tender_no}: ${pq} PQ, ${tq} TQ criteria`,
+    });
+
+    return getOne(id, user);
+  });
+}
+
+// --- From report to tender document -------------------------------------------
+
+/**
+ * Converts an approved Detailed Project Report into a draft tender document.
+ *
+ * This is the step the whole procurement turns on: the report's item-wise
+ * estimate becomes the bill of quantities, its abstract of cost becomes the
+ * estimated value, and the Schedule of Rates lines it was priced from become
+ * the bidding ceiling. Nothing is retyped, so the tender cannot quietly diverge
+ * from the estimate that was sanctioned. What the officer adds afterwards is the
+ * qualification criteria — that, and only that, is what a tender document has
+ * that the report did not.
+ */
+export function createFromDpr(
+  dprId: number,
+  input: z.infer<typeof convertDprSchema>,
+  user: AuthUser,
+) {
+  return transaction(() => {
+    const dpr = recordModel.findDpr(dprId);
+    if (!dpr) throw notFound('DPR');
+
+    const project = projectModel.findById(dpr.project_id);
+    if (!project) throw notFound('Project');
+    // The tender is raised in the project's division, so the officer raising it
+    // has to be able to see that project in the first place.
+    assertProjectVisible(project, user);
+
+    if (dpr.status !== 'APPROVED') {
+      throw conflict(
+        'Only an approved Detailed Project Report can be converted into a tender document. ' +
+          `This report is ${dpr.status.toLowerCase()}.`,
+      );
+    }
+    if (dpr.tender_id) {
+      throw conflict(
+        'This report has already been converted into a tender. Raise a revision of the report to tender again.',
+      );
+    }
+
+    const items = recordModel.listDprItems(dprId);
+    if (!items.length) {
+      throw conflict(
+        'This report carries no item-wise estimate, so there is nothing to tender. ' +
+          'Prepare the estimate first — a tender document is the estimate plus its qualification criteria.',
+      );
+    }
+
+    if (input.packageId) {
+      const pkg = packageModel.findById(input.packageId);
+      if (!pkg) throw badRequest('Select a valid package.');
+      if (pkg.project_id !== dpr.project_id) {
+        throw badRequest('That package does not belong to this report’s project.');
+      }
+    }
+
+    const estimatedValue = dpr.estimated_cost;
+    const tenderNo = generateTenderNo(project.division_code);
+    const tenderId = tenderModel.insertTender({
+      tender_no: tenderNo,
+      title: input.title ?? dpr.title,
+      // The report's own scope and justification are what a bidder needs to
+      // read, so they travel rather than being summarised.
+      description: [dpr.scope, dpr.justification].filter(Boolean).join('\n\n') || null,
+      project_id: dpr.project_id,
+      package_id: input.packageId ?? null,
+      division_id: project.division_id,
+      tender_type: input.tenderType,
+      bid_type: input.bidType,
+      estimated_value: estimatedValue,
+      emd_amount: input.emdPercent ? applyBps(estimatedValue, input.emdPercent) : 0,
+      tender_fee: input.tenderFee ?? 0,
+      completion_period_days: input.completionPeriodDays,
+      min_registration_class: input.minRegistrationClass ?? null,
+      dpr_id: dprId,
+      sr_ceiling_enforced: 1,
+      status: TENDER_STATUS.DRAFT,
+      created_by: user.id,
+    });
+
+    // The estimate becomes the bill of quantities, carrying the Schedule of
+    // Rates line and the rate it was priced at — which is the bidding ceiling.
+    tenderModel.replaceBoqItems(
+      tenderId,
+      items.map((item) => ({
+        sl_no: item.sl_no,
+        item_code: item.item_code,
+        description: item.description,
+        uom: item.uom,
+        quantity: item.quantity,
+        estimated_rate: item.rate,
+        sr_item_id: item.sr_item_id,
+        sr_rate: item.sr_rate,
+      })),
+    );
+    tenderModel.updateTender(tenderId, {
+      sr_ceiling_amount: computeSrCeiling(tenderId, estimatedValue),
+    });
+
+    recordModel.updateDpr(dprId, { tender_id: tenderId });
+    if (input.packageId) {
+      packageModel.updatePackage(input.packageId, { status: PACKAGE_STATUS.TENDERING });
+    }
+
+    insertAuditEntry({
+      userId: user.id,
+      action: 'DPR_CONVERTED_TO_TENDER',
+      entityType: ENTITY_TYPES.TENDER,
+      entityId: tenderId,
+      detail:
+        `${tenderNo} raised from DPR ${dpr.dpr_no} v${dpr.version} — ` +
+        `${items.length} item(s), ₹${toRupees(estimatedValue)}`,
+    });
+
+    return getOne(tenderId, user);
+  });
+}
+
 // --- Bidding ---------------------------------------------------------------
+
+/**
+ * Explains a refusal in the bidder's own terms: what they quoted, what the
+ * ceiling was, and — if relief has been granted — that it was already counted.
+ * A bidder turned away by a rule they cannot see will simply try again.
+ */
+function describeCeilingRefusal(tender: tenderModel.TenderRow, overruns: string[]): string {
+  const shown = overruns.slice(0, 5);
+  const rest = overruns.length - shown.length;
+
+  const preamble = tender.above_sr_permitted
+    ? `This tender permits quoting up to ${fromBps(tender.above_sr_cap_bps)}% above the Schedule of Rates ` +
+      `(${ABOVE_SR_GROUND_LABELS[tender.above_sr_ground ?? ''] ?? 'special consideration'}, ` +
+      `${tender.above_sr_authority ?? 'by order'}). Your bid is above even that ceiling.`
+    : 'A bid may not be quoted above the Schedule of Rates. You may quote at or below the approved rates.';
+
+  // Semicolons between the lines, so a wall of overruns still reads as a list.
+  const lines = shown.join('; ') + (rest > 0 ? `; and ${rest} more line(s)` : '');
+  return `${preamble} ${lines}.`;
+}
 
 /** Contractor-side bid submission. One bid per contractor per tender. */
 export function submitBid(tenderId: number, input: z.infer<typeof submitBidSchema>, user: AuthUser) {
@@ -604,6 +1154,12 @@ export function submitBid(tenderId: number, input: z.infer<typeof submitBidSchem
     let quotedAmount = input.quotedAmount ?? 0;
     let bidItems: { boqItemId: number; quotedRate: number; amount: number }[] = [];
 
+    // The Schedule of Rates ceiling. A bid may go as low as the contractor
+    // likes; it may not go above the government's approved rates unless the
+    // tender carries relief, and then only as far as that relief allows.
+    const enforceCeiling = Boolean(tender.sr_ceiling_enforced);
+    const overruns: string[] = [];
+
     if (tender.bid_type === 'ITEM_RATE') {
       const boq = tenderModel.listBoqItems(tenderId);
       if (!input.items?.length) throw badRequest('Quote a rate against every bill-of-quantities line.');
@@ -617,6 +1173,17 @@ export function submitBid(tenderId: number, input: z.infer<typeof submitBidSchem
         const item = byId.get(entry.boqItemId);
         if (!item) throw badRequest('A quoted line does not belong to this tender.');
         if (entry.quotedRate <= 0) throw badRequest('Every quoted rate must be greater than zero.');
+
+        if (enforceCeiling) {
+          const ceiling = effectiveCeiling(ceilingRateFor(item), tender);
+          if (entry.quotedRate > ceiling) {
+            overruns.push(
+              `Item ${item.sl_no} (${item.description}): quoted ₹${formatIndian(entry.quotedRate)} ` +
+                `against a ceiling of ₹${formatIndian(ceiling)} per ${item.uom}`,
+            );
+          }
+        }
+
         const amount = lineAmount(item.quantity, entry.quotedRate);
         bidItems.push({ boqItemId: item.id, quotedRate: entry.quotedRate, amount });
         quotedAmount += amount;
@@ -625,10 +1192,25 @@ export function submitBid(tenderId: number, input: z.infer<typeof submitBidSchem
       throw badRequest('Enter your quoted amount.');
     }
 
+    const baseCeiling = tender.sr_ceiling_amount || tender.estimated_value;
+    const ceilingAmount = effectiveCeiling(baseCeiling, tender);
+
+    // A percentage or lump-sum bid has no lines to check, so the whole quote is
+    // measured against the whole ceiling.
+    if (enforceCeiling && tender.bid_type !== 'ITEM_RATE' && quotedAmount > ceilingAmount) {
+      overruns.push(
+        `Quoted ₹${formatIndian(quotedAmount)} against a ceiling of ₹${formatIndian(ceilingAmount)}`,
+      );
+    }
+
+    if (overruns.length) throw badRequest(describeCeilingRefusal(tender, overruns));
+
     const variationBps =
       tender.estimated_value > 0
         ? Math.round(((quotedAmount - tender.estimated_value) / tender.estimated_value) * 10_000)
         : 0;
+    const srVariationBps =
+      baseCeiling > 0 ? Math.round(((quotedAmount - baseCeiling) / baseCeiling) * 10_000) : 0;
 
     const bidNo = generateBidNo(tender.tender_no);
     const bidId = tenderModel.insertBid({
@@ -639,6 +1221,11 @@ export function submitBid(tenderId: number, input: z.infer<typeof submitBidSchem
       emd_paid: tender.emd_amount,
       quoted_amount: quotedAmount,
       variation_bps: variationBps,
+      sr_ceiling_amount: ceilingAmount,
+      sr_variation_bps: srVariationBps,
+      // Recorded whenever the quote sits above the approved rates, which it can
+      // only do under the relief granted on the tender.
+      is_above_sr: quotedAmount > baseCeiling ? 1 : 0,
       status: 'SUBMITTED',
       submitted_at: now,
     });
@@ -703,15 +1290,49 @@ export function recordTechnicalEvaluation(
 
     const bids = tenderModel.listBidsForTender(id);
     const byId = new Map(bids.map((b) => [b.id, b]));
+    const criteria = new Map(tenderModel.listCriteria(id).map((c) => [c.id, c]));
 
     for (const entry of input.evaluations) {
       const bid = byId.get(entry.bidId);
       if (!bid) throw badRequest('A bid in the evaluation does not belong to this tender.');
+
+      let status = entry.technicalStatus;
+      let score = entry.technicalScore ?? null;
+
+      if (entry.criteria?.length) {
+        let total = 0;
+        const responses = entry.criteria.map((response) => {
+          const criterion = criteria.get(response.criterionId);
+          if (!criterion) {
+            throw badRequest('A criterion in the evaluation does not belong to this tender.');
+          }
+          if (response.score > criterion.max_score) {
+            throw badRequest(
+              `"${criterion.title}" is marked out of ${criterion.max_score}; ${response.score} was given.`,
+            );
+          }
+          // A mandatory criterion the bid does not meet ends the matter, whatever
+          // the committee scored elsewhere.
+          if (criterion.is_mandatory && !response.isMet) status = 'DISQUALIFIED';
+          if (criterion.kind === 'TQ' && response.isMet) total += response.score;
+
+          return {
+            criterion_id: criterion.id,
+            is_met: response.isMet ? 1 : 0,
+            score: response.score,
+            remarks: response.remarks ?? null,
+          };
+        });
+
+        tenderModel.replaceCriterionResponses(bid.id, responses);
+        score = total;
+      }
+
       tenderModel.updateBid(bid.id, {
-        technical_status: entry.technicalStatus,
-        technical_score: entry.technicalScore ?? null,
+        technical_status: status,
+        technical_score: score,
         technical_remarks: entry.remarks ?? null,
-        status: entry.technicalStatus === 'QUALIFIED' ? 'TECHNICALLY_QUALIFIED' : 'DISQUALIFIED',
+        status: status === 'QUALIFIED' ? 'TECHNICALLY_QUALIFIED' : 'DISQUALIFIED',
       });
     }
 

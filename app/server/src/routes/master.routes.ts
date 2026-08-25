@@ -22,6 +22,8 @@ masterRouter.get(
   asyncHandler(controller.list),
 );
 masterRouter.get('/:key/:id', asyncHandler(controller.getOne));
+// The rate book keeps its past. Readable by anyone who may read the master.
+masterRouter.get('/:key/:id/history', asyncHandler(controller.history));
 
 // Maintaining them is restricted to the administrative cadre.
 masterRouter.post('/:key', requirePermission('masters.manage'), asyncHandler(controller.create));

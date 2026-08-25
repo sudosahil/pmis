@@ -71,11 +71,30 @@ the convention from the source documents), a sanction chain, milestones with wei
 physical and financial progress. A project breaks into packages, which are what actually get
 tendered, awarded and billed.
 
-**Procurement.** Tenders publish with a bill of quantities, take bids within a bidding window,
-and run a two-envelope evaluation: financial bids stay sealed until technical evaluation
-closes, then bids are ranked L1, L2, L3 and an award issues a Letter of Acceptance. Contractors
-register themselves through a public form, are verified by the division office, and then bid
-and bill through their own portal.
+**Estimating.** A work begins as a Detailed Project Report, and the report begins as an
+item-wise estimate: each line names an item of work and takes its rate from the Schedule of
+Rates rather than from whoever is filling in the form. Contingency and work-charged
+establishment are added on top, and that abstract of cost is what an administrative approval is
+granted against. The rate is copied onto the line, so a later revision of the rate book never
+rewrites an estimate that has already been sanctioned — repricing is a deliberate act.
+
+**Procurement.** An approved report is *converted* into the tender document: its estimate
+becomes the bill of quantities, its abstract of cost becomes the estimated value, and the
+Schedule of Rates lines behind it become the bidding ceiling. Nothing is retyped, so the tender
+cannot drift from the estimate that was sanctioned. What the officer adds is the
+pre-qualification and technical qualification criteria — PQ is pass or fail and screens the
+bidder, TQ is marked out of a hundred and the technical score is totalled from those marks.
+
+Tenders then publish, take bids within a bidding window, and run a two-envelope evaluation:
+financial bids stay sealed until technical evaluation closes, then bids are ranked L1, L2, L3
+and an award issues a Letter of Acceptance. Contractors register themselves through a public
+form, are verified by the division office, and then bid and bill through their own portal.
+
+**The Schedule of Rates ceiling.** A bidder may quote as far below the government's approved
+rates as they like, and not a paisa above. The ceiling is per line for an item-rate tender and
+on the total otherwise, and it is frozen onto the tender when it is raised — a revision of the
+rate book must not move the goalposts under a bid already being prepared. See
+[Bidding above the schedule](#bidding-above-the-schedule) for the exception.
 
 **Bills.** Running account bills reproduce the departmental form exactly: measurements against
 the agreement, present quantity as cumulative less previously billed, the Executive Engineer's
@@ -87,6 +106,12 @@ GST-invoice-above-threshold rules from the submission guidelines enforced at the
 
 **Money.** Funds are released against schemes to divisions; divisions request letters of credit
 to pay from.
+
+**Reports and MIS.** Six departmental reports, each answering a question the office already
+asks on paper: contractor-wise bill submission, ageing analysis of bills, BOQ analysis against
+the schedule, Schedule of Rates analysis, the change history of every rate, and approval
+analysis. Every one is scoped the way the screens are, filters by division and period, and
+downloads as CSV or prints.
 
 **Approvals.** One workflow engine drives all of it. Every approvable record — project sanction,
 tender approval, contractor registration, RA bill, miscellaneous bill, letter of credit — moves
@@ -151,6 +176,38 @@ Conversion happens only in the zod layer on the way in and the presenter on the 
 worked example from the source bill form, where 2% + 3% + 4% on an admissible amount of ₹5,000
 comes to exactly ₹450.
 
+### Bidding above the schedule
+
+The Schedule of Rates is a price list fixed at a point in time. When a war, a pandemic or a
+price shock postdates the edition an estimate was built from, holding bidders to that edition
+draws no bids at all — the schedule says one thing and the market says another.
+
+So the department may lift the ceiling, and the system treats that as a decision rather than a
+workaround:
+
+- it is **granted on the tender**, before bidding opens, so every bidder prices against the
+  same ceiling — relief claimed after the envelopes are in would favour whoever asked;
+- it names a **ground** (war, pandemic, price escalation, natural calamity) and cites the
+  **circular or order** that authorises it, both of which appear on the published notice;
+- it is capped: a bid beyond the stated margin is still refused, and the refusal says so;
+- it is held behind its own permission (`tenders.sr.relief`, the senior cadre only) rather
+  than riding on the permission that lets an officer draft a tender at all;
+- it is recorded against the officer who granted it, and cannot be withdrawn once a bid has
+  been priced against it — withdrawing it then would invalidate a bid already submitted.
+
+Every bid records the ceiling it was accepted against and whether it used the relief, so the
+check that let it through stays readable after the tender is amended.
+
+### The rate book keeps its past
+
+A rate is a financial control: it is the ceiling a bid is measured against and the baseline a
+running bill is verified against. An agreement priced against last year's rate and a bid refused
+against this year's both have to be explicable years later — so a Schedule of Rates row is never
+simply overwritten. Every movement is written to `schedule_of_rate_history` with the old value,
+the new one, the date it took effect, the circular behind it and who recorded it. The item's
+code and name are copied onto the entry rather than joined, so the history still reads after the
+master row itself is gone.
+
 ### One registry for fourteen masters
 
 Zones, circles, divisions, sub divisions, districts, towns, scheme types, schemes, work types,
@@ -177,6 +234,14 @@ row per code), and a structural edit behaves differently depending on what is in
 Renaming a chain, re-describing it or deactivating it touches no structure and is always allowed.
 A chain that has never carried a file can be deleted; one that has must be deactivated instead,
 so its history stays readable.
+
+### Schema changes on a live database
+
+`CREATE TABLE IF NOT EXISTS` keeps a fresh checkout working but says nothing about a table that
+is already there, so a new column on an old table needs an explicit `ALTER TABLE`. `db/index.ts`
+carries a short list of added columns and applies each one only when it is missing, which makes
+running it on every boot harmless. The same columns are written into `schema.sql` as well, so a
+database created today gets them from the start and never reaches that list.
 
 ### Two logs, deliberately
 

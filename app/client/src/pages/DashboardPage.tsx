@@ -49,6 +49,7 @@ export function DashboardPage() {
    ========================================================================== */
 
 function StaffView({ data }: { data: StaffDashboard }) {
+  const { can } = useAuth();
   const { cards, myApprovals } = data;
 
   return (
@@ -179,7 +180,16 @@ function StaffView({ data }: { data: StaffDashboard }) {
           )}
         </Card>
 
-        <Card title="Scheme-wise utilisation" subtitle="Sanctioned against paid, current position" flush>
+        <Card
+          title="Scheme-wise utilisation"
+          subtitle="Sanctioned against paid, current position"
+          actions={
+            can('reports.view') ? (
+              <Link to="/reports/contractor-bills" className="btn btn--sm">Reports</Link>
+            ) : undefined
+          }
+          flush
+        >
           {data.spendByScheme.length ? (
             <DataTable
               rows={data.spendByScheme}
@@ -213,7 +223,18 @@ function StaffView({ data }: { data: StaffDashboard }) {
       </div>
 
       {data.overdueApprovals.length > 0 && (
-        <Card title="Files past their service level" subtitle="Grouped by the role that owes an action" flush>
+        <Card
+          title="Files past their service level"
+          subtitle="Grouped by the role that owes an action"
+          actions={
+            can('reports.view') ? (
+              <Link to="/reports/approval-analysis" className="btn btn--sm">
+                Full approval analysis
+              </Link>
+            ) : undefined
+          }
+          flush
+        >
           <DataTable
             rows={data.overdueApprovals}
             rowKey={(row) => `${row.role}-${row.entityType}`}
@@ -265,7 +286,16 @@ function StaffView({ data }: { data: StaffDashboard }) {
       )}
 
       {data.billTrend.length > 0 && (
-        <Card title="Bill throughput" subtitle="Last six months of running account bills" flush>
+        <Card
+          title="Bill throughput"
+          subtitle="Last six months of running account bills"
+          actions={
+            can('reports.view') ? (
+              <Link to="/reports/bill-ageing" className="btn btn--sm">Ageing analysis</Link>
+            ) : undefined
+          }
+          flush
+        >
           <DataTable
             rows={data.billTrend}
             rowKey={(row) => row.month}

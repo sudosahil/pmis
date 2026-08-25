@@ -5,11 +5,11 @@ import { api, ApiError, type Page } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../components/Toast';
 import { useLookup } from '../hooks/useLookup';
-import { date, money, percent } from '../lib/format';
-import type { MasterDefinition, MasterField, MasterRecord } from '../types';
+import { date, dateTime, humanise, money, percent, rupees } from '../lib/format';
+import type { MasterDefinition, MasterField, MasterRecord, SrHistoryEntry } from '../types';
 import {
-  Alert, Button, Card, Checkbox, EditIcon, Loading, PageHeader, PlusIcon, Select, TextArea,
-  TextInput, TrashIcon,
+  Alert, Button, Card, Checkbox, ClockIcon, EditIcon, EmptyState, Loading, PageHeader,
+  PlusIcon, Select, TextArea, TextInput, TrashIcon,
 } from '../components/ui';
 import { DataTable, Pagination } from '../components/DataTable';
 import { ConfirmModal, Modal } from '../components/Modal';
@@ -28,6 +28,7 @@ export function MastersPage() {
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<MasterRecord | null>(null);
   const [deleting, setDeleting] = useState<MasterRecord | null>(null);
+  const [historyOf, setHistoryOf] = useState<MasterRecord | null>(null);
 
   const search = params.get('search') ?? '';
   const page = Number(params.get('page') ?? 1);
@@ -92,6 +93,12 @@ export function MastersPage() {
   }
 
   const canMaintain = hasRole('ADMIN', 'CE', 'SE');
+  /**
+   * The Schedule of Rates is the one master whose past matters as much as its
+   * present: an agreement priced against last year's rate and a bid refused
+   * against this year's both have to be explicable long afterwards.
+   */
+  const keepsHistory = activeKey === 'schedule-of-rates';
   const listFields = (definition?.fields ?? []).filter((field) => field.inList);
 
   if (definitions.isLoading) return <Loading label="Loading master data…" />;
@@ -168,7 +175,7 @@ export function MastersPage() {
                     numeric: field.type === 'money' || field.type === 'percent' || field.type === 'number',
                     render: (row: MasterRecord) => renderValue(field, row),
                   })),
-                  ...(canMaintain
+                  ...(canMaintain || keepsHistory
                     ? [
                         {
                           key: '__actions',
@@ -176,16 +183,30 @@ export function MastersPage() {
                           actions: true,
                           render: (row: MasterRecord) => (
                             <div className="btn-group">
-                              <Button size="sm" icon={<EditIcon />} onClick={() => setEditing(row)}>
-                                Edit
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                icon={<TrashIcon />}
-                                onClick={() => setDeleting(row)}
-                                aria-label="Delete"
-                              />
+                              {keepsHistory && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  icon={<ClockIcon />}
+                                  onClick={() => setHistoryOf(row)}
+                                >
+                                  History
+                                </Button>
+                              )}
+                              {canMaintain && (
+                                <Button size="sm" icon={<EditIcon />} onClick={() => setEditing(row)}>
+                                  Edit
+                                </Button>
+                              )}
+                              {canMaintain && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  icon={<TrashIcon />}
+                                  onClick={() => setDeleting(row)}
+                                  aria-label="Delete"
+                                />
+                              )}
                             </div>
                           ),
                         },
@@ -245,7 +266,94 @@ export function MastersPage() {
         onConfirm={() => deleting && remove.mutate(deleting.id)}
         onClose={() => setDeleting(null)}
       />
+
+      {historyOf && activeKey && (
+        <RateHistoryDialog
+          masterKey={activeKey}
+          record={historyOf}
+          onClose={() => setHistoryOf(null)}
+        />
+      )}
     </>
+  );
+}
+
+/**
+ * Everything that has happened to one Schedule of Rates line: what the rate
+ * was, what it became, when it took effect and under which circular.
+ */
+function RateHistoryDialog({
+  masterKey, record, onClose,
+}: {
+  masterKey: string;
+  record: MasterRecord;
+  onClose: () => void;
+}) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['master-history', masterKey, record.id],
+    queryFn: () => api.get<SrHistoryEntry[]>(`/masters/${masterKey}/${record.id}/history`),
+  });
+
+  return (
+    <Modal
+      open
+      title="Rate history"
+      subtitle={`${String(record.code ?? '')} — ${String(record.name ?? '')}`}
+      size="wide"
+      onClose={onClose}
+      footer={<Button onClick={onClose}>Close</Button>}
+    >
+      {isLoading ? (
+        <Loading label="Loading the history…" />
+      ) : !data?.length ? (
+        <EmptyState
+          title="Nothing on record yet"
+          text="Every change from here on is kept, with the order that authorised it."
+        />
+      ) : (
+        <div className="history">
+          {data.map((entry) => (
+            <div key={entry.id} className="history__item">
+              <span className="history__avatar" aria-hidden="true">
+                {entry.changeKind.slice(0, 2)}
+              </span>
+              <div style={{ minWidth: 0 }}>
+                <div className="history__head">
+                  <span className="history__actor">{humanise(entry.changeKind)}</span>
+                  <span className="history__time">{dateTime(entry.changedAt)}</span>
+                </div>
+                {entry.oldRate !== null
+                  && entry.newRate !== null
+                  && entry.oldRate !== entry.newRate && (
+                  <div style={{ marginTop: 4 }}>
+                    {rupees(entry.oldRate)} → <strong>{rupees(entry.newRate)}</strong>
+                    {entry.changePercent !== null && (
+                      <span
+                        style={{
+                          marginLeft: 8,
+                          color: entry.changePercent > 0 ? 'var(--warn-fg)' : 'var(--ok-fg)',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {entry.changePercent > 0 ? '+' : ''}{percent(entry.changePercent)}
+                      </span>
+                    )}
+                  </div>
+                )}
+                <div className="timeline__meta">
+                  {entry.effectiveDate && <>Effective {date(entry.effectiveDate)}. </>}
+                  {entry.govtReference && (
+                    <>Authority <span className="code">{entry.govtReference}</span>. </>
+                  )}
+                  {entry.changedBy && <>Recorded by {entry.changedBy}.</>}
+                </div>
+                {entry.remarks && <p style={{ marginTop: 4 }}>{entry.remarks}</p>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
   );
 }
 

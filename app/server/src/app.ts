@@ -20,6 +20,7 @@ import { chatRouter } from './routes/chat.routes.js';
 import { activityRouter } from './routes/activity.routes.js';
 import { roleRouter } from './routes/permission.routes.js';
 import { noteRouter } from './routes/record.routes.js';
+import { reportRouter } from './routes/report.routes.js';
 import { activityLogger } from './middleware/activity.js';
 
 export function createApp(): express.Express {
@@ -82,6 +83,7 @@ export function createApp(): express.Express {
   app.use('/api/activity', activityRouter);
   app.use('/api/roles', roleRouter);
   app.use('/api/notes', noteRouter);
+  app.use('/api/reports', reportRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

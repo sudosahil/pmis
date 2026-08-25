@@ -38,6 +38,7 @@ import { LiveActivityPage } from './pages/LiveActivityPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { SearchPage } from './pages/SearchPage';
 import { RoleAccessPage } from './pages/RoleAccessPage';
+import { ReportsPage } from './pages/ReportsPage';
 
 /** Sends anyone without a session to the sign-in screen, remembering where they were headed. */
 function RequireAuth() {
@@ -237,6 +238,11 @@ export function App() {
         <Route element={<RequirePermission permission="funds.view" />}>
           <Route path="/funds" element={<FundsPage />} />
           <Route path="/funds/loc/:id" element={<LocRequestDetailPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission="reports.view" />}>
+          <Route path="/reports" element={<ReportsPage />} />
+          <Route path="/reports/:key" element={<ReportsPage />} />
         </Route>
 
         <Route element={<RequirePermission permission="masters.view" />}>

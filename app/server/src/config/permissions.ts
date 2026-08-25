@@ -26,6 +26,7 @@ export interface PermissionDefinition {
     | 'Funds'
     | 'Documents'
     | 'Communication'
+    | 'Analytics'
     | 'Administration';
   /**
    * Permissions the system refuses to take away from an administrator, because
@@ -85,6 +86,15 @@ export const PERMISSIONS: PermissionDefinition[] = [
     key: 'tenders.bid',
     label: 'Submit a bid',
     description: 'Bid for a published tender. Held by contractors.',
+    group: 'Procurement',
+  },
+  {
+    key: 'tenders.sr.relief',
+    label: 'Permit bidding above the Schedule of Rates',
+    description:
+      'Lift the Schedule of Rates ceiling on a tender by a stated margin, on a stated ground — a war, ' +
+      'a pandemic or a price shock that postdates the rate edition the estimate was built from. ' +
+      'Held by the senior cadre alone, and recorded against the officer who grants it.',
     group: 'Procurement',
   },
   {
@@ -206,6 +216,16 @@ export const PERMISSIONS: PermissionDefinition[] = [
     group: 'Communication',
   },
 
+  // --- Analytics -----------------------------------------------------------
+  {
+    key: 'reports.view',
+    label: 'Open reports and MIS',
+    description:
+      'Read the departmental reports: contractor-wise billing, bill ageing, BOQ and Schedule of Rates ' +
+      'analysis, the rate change history, and approval pendency.',
+    group: 'Analytics',
+  },
+
   // --- Administration ------------------------------------------------------
   {
     key: 'approvals.act',
@@ -287,31 +307,31 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
   [ROLES.ADMIN]: PERMISSION_KEYS,
 
   [ROLES.MD]: [
-    'projects.view', 'tenders.view', 'contractors.view',
+    'projects.view', 'tenders.view', 'tenders.sr.relief', 'contractors.view',
     'bills.ra.view', 'bills.misc.view',
     'funds.view', 'funds.release', 'funds.loc.approve',
     'files.view', 'files.manage', 'chat.use', 'chat.groups',
-    'approvals.act', 'masters.view', 'workflows.view', 'audit.view',
+    'reports.view', 'approvals.act', 'masters.view', 'workflows.view', 'audit.view',
   ],
 
   [ROLES.CE]: [
     'projects.view', 'projects.manage',
-    'tenders.view', 'tenders.manage', 'tenders.evaluate', 'tenders.award',
+    'tenders.view', 'tenders.manage', 'tenders.evaluate', 'tenders.award', 'tenders.sr.relief',
     'contractors.view', 'contractors.manage', 'contractors.blacklist',
     'bills.ra.view', 'bills.misc.view',
     'funds.view', 'funds.release',
     'files.view', 'files.manage', 'chat.use', 'chat.groups',
-    'approvals.act', 'masters.view', 'masters.manage', 'workflows.view',
+    'reports.view', 'approvals.act', 'masters.view', 'masters.manage', 'workflows.view',
   ],
 
   [ROLES.SE]: [
     'projects.view', 'projects.manage',
-    'tenders.view', 'tenders.manage', 'tenders.evaluate', 'tenders.award',
+    'tenders.view', 'tenders.manage', 'tenders.evaluate', 'tenders.award', 'tenders.sr.relief',
     'contractors.view', 'contractors.manage', 'contractors.blacklist',
     'bills.ra.view', 'bills.misc.view',
     'funds.view',
     'files.view', 'files.manage', 'chat.use', 'chat.groups',
-    'approvals.act', 'masters.view', 'masters.manage', 'workflows.view',
+    'reports.view', 'approvals.act', 'masters.view', 'masters.manage', 'workflows.view',
   ],
 
   [ROLES.EE]: [
@@ -322,7 +342,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'bills.misc.view', 'bills.misc.raise',
     'funds.view', 'funds.loc.request',
     'files.view', 'files.manage', 'chat.use', 'chat.groups',
-    'approvals.act', 'masters.view', 'workflows.view',
+    'reports.view', 'approvals.act', 'masters.view', 'workflows.view',
   ],
 
   [ROLES.AEE]: [
@@ -331,7 +351,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'bills.ra.view', 'bills.ra.raise', 'bills.misc.view',
     'funds.view',
     'files.view', 'files.manage', 'chat.use', 'chat.groups',
-    'approvals.act', 'masters.view', 'workflows.view',
+    'reports.view', 'approvals.act', 'masters.view', 'workflows.view',
   ],
 
   [ROLES.AE]: [
@@ -340,7 +360,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'bills.ra.view', 'bills.ra.raise', 'bills.misc.view',
     'funds.view',
     'files.view', 'files.manage', 'chat.use', 'chat.groups',
-    'approvals.act', 'masters.view', 'workflows.view',
+    'reports.view', 'approvals.act', 'masters.view', 'workflows.view',
   ],
 
   [ROLES.AC]: [
@@ -349,7 +369,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'bills.misc.view', 'bills.misc.raise',
     'funds.view', 'funds.loc.request',
     'files.view', 'files.manage', 'chat.use', 'chat.groups',
-    'approvals.act', 'masters.view', 'workflows.view',
+    'reports.view', 'approvals.act', 'masters.view', 'workflows.view',
   ],
 
   [ROLES.AS]: [
@@ -358,7 +378,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'bills.misc.view', 'bills.misc.raise',
     'funds.view', 'funds.loc.request',
     'files.view', 'files.manage', 'chat.use', 'chat.groups',
-    'approvals.act', 'masters.view', 'workflows.view',
+    'reports.view', 'approvals.act', 'masters.view', 'workflows.view',
   ],
 
   [ROLES.AAO]: [
@@ -366,7 +386,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'bills.ra.view', 'bills.ra.deductions', 'bills.misc.view', 'bills.treasury',
     'funds.view', 'funds.loc.approve',
     'files.view', 'files.manage', 'chat.use', 'chat.groups',
-    'approvals.act', 'masters.view', 'workflows.view',
+    'reports.view', 'approvals.act', 'masters.view', 'workflows.view',
   ],
 
   [ROLES.CAO]: [
@@ -375,7 +395,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'bills.ra.view', 'bills.ra.deductions', 'bills.misc.view', 'bills.treasury',
     'funds.view', 'funds.release', 'funds.loc.approve',
     'files.view', 'files.manage', 'chat.use', 'chat.groups',
-    'approvals.act', 'masters.view', 'workflows.view', 'audit.view',
+    'reports.view', 'approvals.act', 'masters.view', 'workflows.view', 'audit.view',
   ],
 
   // Read-only by design.
@@ -383,7 +403,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     'projects.view', 'tenders.view', 'contractors.view',
     'bills.ra.view', 'bills.misc.view', 'funds.view',
     'files.view', 'chat.use',
-    'approvals.act', 'masters.view', 'workflows.view',
+    'reports.view', 'approvals.act', 'masters.view', 'workflows.view',
     'audit.view', 'activity.view',
   ],
 
