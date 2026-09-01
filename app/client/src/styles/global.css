@@ -47,6 +47,21 @@
   --info-fg: #14468c;
   --info-line: #a9c4ec;
 
+  /* Chart series. A fixed assignment order, validated for colour-blind
+     separation against this surface; slots are never cycled or generated. */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #4a3aa7;
+
+  /* Ageing is an ordered severity, so it takes a ramp rather than a hue each. */
+  --age-1: #1baf7a;
+  --age-2: #eda100;
+  --age-3: #eb6834;
+  --age-4: #d64545;
+
   --neutral-bg: #eef1f5;
   --neutral-fg: #444c58;
   --neutral-line: #cbd2dc;
@@ -1774,6 +1789,295 @@ a.stat:hover {
   }
 }
 
+
+/* --------------------------------------------------------------------------
+   Charts
+
+   Drawn as inline SVG against the tokens above, so they answer to the same
+   palette as everything else and survive both the print stylesheet and a
+   greyscale printout — every mark carries a figure or a label beside it, and
+   none of them is read by colour alone.
+   -------------------------------------------------------------------------- */
+
+.chart {
+  position: relative;
+  padding: 4px 2px 0;
+}
+
+.chart__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.chart__grid {
+  stroke: var(--line-soft);
+  stroke-width: 1;
+}
+
+.chart__baseline {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.chart__crosshair {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.chart__line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+/* A surface-coloured ring keeps overlapping markers legible where two series
+   cross at the same value. */
+.chart__marker {
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.chart__bar {
+  transition: opacity 0.15s ease;
+}
+
+.chart__bar.is-active {
+  opacity: 0.82;
+}
+
+.chart__axis-label {
+  fill: var(--ink-500);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart__axis-note {
+  fill: var(--ink-400);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The figure above a column. Ink, never the mark's own colour. */
+.chart__value {
+  fill: var(--ink-900);
+  font-size: 13px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: none;
+  display: inline-block;
+}
+
+.chart__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 10px 0 2px;
+  padding: 0 0 0 4px;
+  list-style: none;
+  font-size: 12.5px;
+  color: var(--ink-600);
+}
+
+.chart__legend li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.chart__tooltip {
+  position: absolute;
+  top: 8px;
+  z-index: 3;
+  min-width: 190px;
+  padding: 9px 11px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 18px rgba(11, 37, 69, 0.14);
+  pointer-events: none;
+  font-size: 12.5px;
+}
+
+.chart__tooltip-head {
+  font-weight: 650;
+  color: var(--ink-900);
+  margin-bottom: 6px;
+}
+
+.chart__tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.chart__tooltip-label {
+  color: var(--ink-600);
+}
+
+.chart__tooltip-value {
+  margin-left: auto;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-900);
+}
+
+/* A chart in a flush card: the chart is padded, the figures below it are not,
+   so the disclosure and its table run the full width the way a table should. */
+.card__chart {
+  padding: 14px 18px 6px;
+}
+
+/* --- Horizontal bar lists (schemes, divisions, workload) ------------------ */
+
+.barrows {
+  list-style: none;
+  margin: 0;
+  padding: 2px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.barrows__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.barrows__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-900);
+  min-width: 0;
+}
+
+.barrows__sublabel {
+  font-weight: 400;
+  color: var(--ink-500);
+  margin-left: 8px;
+}
+
+.barrows__value {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-700);
+  white-space: nowrap;
+}
+
+.barrows__pct {
+  display: inline-block;
+  min-width: 44px;
+  text-align: right;
+  font-weight: 650;
+  color: var(--ink-900);
+}
+
+.barrows__track {
+  height: 10px;
+  border-radius: 5px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line-soft);
+  overflow: hidden;
+}
+
+.barrows__fill {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+  transition: width 0.3s ease;
+}
+
+/* Names a chart that sits beside another inside one card. */
+.chart-heading {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-500);
+}
+
+/* --- One bar, divided into its parts -------------------------------------- */
+
+.stackbar__track {
+  display: flex;
+  height: 22px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  /* A surface-coloured gap between segments so two adjacent fills never read
+     as one. */
+  gap: 2px;
+}
+
+.stackbar__segment {
+  display: block;
+  height: 100%;
+}
+
+.stackbar__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12.5px;
+}
+
+.stackbar__legend li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.stackbar__legend-label {
+  color: var(--ink-600);
+}
+
+.stackbar__legend-value {
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-900);
+}
+
+/* --- The figures behind a chart, for anyone who would rather read them ----- */
+
+.chart-figures {
+  border-top: 1px solid var(--line-soft);
+  margin-top: 4px;
+}
+
+.chart-figures > summary {
+  cursor: pointer;
+  padding: 10px 16px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--brand-700);
+  list-style-position: inside;
+}
+
+.chart-figures > summary:hover {
+  background: var(--brand-050);
+}
+
+.chart-figures[open] > summary {
+  border-bottom: 1px solid var(--line-soft);
+}
+
 /* --------------------------------------------------------------------------
    Print — bill vouchers are printed and filed
    -------------------------------------------------------------------------- */
@@ -1804,4 +2108,10 @@ a.stat:hover {
   }
   .table thead th { position: static; background: #eee; }
   a { color: inherit; text-decoration: none; }
+  /* Charts print: they are SVG, and every mark is labelled. The tooltip is a
+     hover artefact and the disclosure is opened so the figures come with it. */
+  .chart__tooltip { display: none !important; }
+  .chart, .barrows, .stackbar { break-inside: avoid; page-break-inside: avoid; }
+  .chart-figures > summary { display: none; }
+  .chart-figures > *:not(summary) { display: block !important; }
 }

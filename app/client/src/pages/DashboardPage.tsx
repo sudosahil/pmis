@@ -11,6 +11,13 @@ import {
 import { Alert, Card, DetailItem, EmptyState, Loading, PageHeader, Progress, Button, PlusIcon } from '../components/ui';
 import { StatusBadge } from '../components/StatusBadge';
 import { DataTable, type Column } from '../components/DataTable';
+import { TrendChart } from '../components/charts/TrendChart';
+import { ColumnChart } from '../components/charts/ColumnChart';
+import { BarRows } from '../components/charts/BarRows';
+import { StackedBar } from '../components/charts/StackedBar';
+import {
+  AGE_RAMP, PROJECT_STATUS_COLOUR, SERIES, TENDER_STAGE_COLOUR,
+} from '../components/charts/chart-kit';
 
 export function DashboardPage() {
   const { user } = useAuth();
@@ -191,31 +198,49 @@ function StaffView({ data }: { data: StaffDashboard }) {
           flush
         >
           {data.spendByScheme.length ? (
-            <DataTable
-              rows={data.spendByScheme}
-              rowKey={(row) => row.schemeCode}
-              compact
-              columns={[
-                {
-                  key: 'scheme',
-                  header: 'Scheme',
-                  render: (row) => (
-                    <>
-                      <div className="cell-primary">{row.schemeCode}</div>
-                      <div className="cell-muted">{row.projectCount} project(s)</div>
-                    </>
-                  ),
-                },
-                { key: 'sanctioned', header: 'Sanctioned', numeric: true, render: (row) => rupeesShort(row.sanctioned) },
-                { key: 'paid', header: 'Paid', numeric: true, render: (row) => rupeesShort(row.paid) },
-                {
-                  key: 'util',
-                  header: 'Utilisation',
-                  width: '150px',
-                  render: (row) => <Progress value={row.utilisation} label={`${row.schemeName} utilisation`} />,
-                },
-              ]}
-            />
+            <>
+              <div className="card__chart">
+                <BarRows
+                  rows={data.spendByScheme.map((row) => ({
+                    key: row.schemeCode,
+                    label: row.schemeCode,
+                    sublabel: `${row.projectCount} project(s)`,
+                    value: row.paid,
+                    of: row.sanctioned,
+                    note: `${rupeesShort(row.paid)} of ${rupeesShort(row.sanctioned)}`,
+                  }))}
+                  format={rupeesShort}
+                />
+              </div>
+              <details className="chart-figures">
+                <summary>Show the figures</summary>
+                <DataTable
+                  rows={data.spendByScheme}
+                  rowKey={(row) => row.schemeCode}
+                  compact
+                  columns={[
+                    {
+                      key: 'scheme',
+                      header: 'Scheme',
+                      render: (row) => (
+                        <>
+                          <div className="cell-primary">{row.schemeCode}</div>
+                          <div className="cell-muted">{row.schemeName}</div>
+                        </>
+                      ),
+                    },
+                    { key: 'sanctioned', header: 'Sanctioned', numeric: true, render: (row) => rupeesShort(row.sanctioned) },
+                    { key: 'paid', header: 'Paid', numeric: true, render: (row) => rupeesShort(row.paid) },
+                    {
+                      key: 'util',
+                      header: 'Utilisation',
+                      width: '150px',
+                      render: (row) => <Progress value={row.utilisation} label={`${row.schemeName} utilisation`} />,
+                    },
+                  ]}
+                />
+              </details>
+            </>
           ) : (
             <EmptyState title="No scheme spend recorded yet" />
           )}
@@ -235,26 +260,60 @@ function StaffView({ data }: { data: StaffDashboard }) {
           }
           flush
         >
-          <DataTable
-            rows={data.overdueApprovals}
-            rowKey={(row) => `${row.role}-${row.entityType}`}
-            compact
-            columns={[
-              { key: 'role', header: 'Pending with', render: (row) => row.roleName ?? row.role },
-              { key: 'type', header: 'Record type', render: (row) => humanise(row.entityType) },
-              { key: 'count', header: 'Files', numeric: true, render: (row) => row.count },
-              { key: 'amount', header: 'Value held up', numeric: true, render: (row) => rupees(row.amount) },
-            ]}
-          />
+          <>
+            <div className="card__chart">
+              <BarRows
+                rows={data.overdueApprovals.map((row) => ({
+                  key: `${row.role}-${row.entityType}`,
+                  label: row.roleName ?? row.role,
+                  sublabel: humanise(row.entityType),
+                  value: row.amount,
+                  note: `${rupeesShort(row.amount)} · ${row.count} file(s)`,
+                }))}
+                format={rupeesShort}
+                color="var(--age-4)"
+              />
+            </div>
+            <details className="chart-figures">
+              <summary>Show the figures</summary>
+              <DataTable
+                rows={data.overdueApprovals}
+                rowKey={(row) => `${row.role}-${row.entityType}`}
+                compact
+                columns={[
+                  { key: 'role', header: 'Pending with', render: (row) => row.roleName ?? row.role },
+                  { key: 'type', header: 'Record type', render: (row) => humanise(row.entityType) },
+                  { key: 'count', header: 'Files', numeric: true, render: (row) => row.count },
+                  { key: 'amount', header: 'Value held up', numeric: true, render: (row) => rupees(row.amount) },
+                ]}
+              />
+            </details>
+          </>
         </Card>
       )}
 
       {data.divisionPerformance.length > 0 && (
         <Card title="Division performance" subtitle="Sanctioned value against payments made" flush>
-          <DataTable
-            rows={data.divisionPerformance}
-            rowKey={(row) => row.divisionId}
-            columns={[
+          <>
+            <div className="card__chart">
+              <BarRows
+                rows={data.divisionPerformance.map((row) => ({
+                  key: String(row.divisionId),
+                  label: row.divisionName,
+                  sublabel: `${row.projectCount} project(s)`,
+                  value: row.paid,
+                  of: row.sanctioned,
+                  note: `${rupeesShort(row.paid)} of ${rupeesShort(row.sanctioned)}`,
+                }))}
+                format={rupeesShort}
+              />
+            </div>
+            <details className="chart-figures">
+              <summary>Show the figures</summary>
+              <DataTable
+                rows={data.divisionPerformance}
+                rowKey={(row) => row.divisionId}
+                columns={[
               {
                 key: 'division',
                 header: 'Division',
@@ -274,21 +333,23 @@ function StaffView({ data }: { data: StaffDashboard }) {
                 numeric: true,
                 render: (row) => row.billsInApproval,
               },
-              {
-                key: 'util',
-                header: 'Utilisation',
-                width: '160px',
-                render: (row) => <Progress value={row.utilisation} label={`${row.divisionName} utilisation`} />,
-              },
-            ]}
-          />
+                  {
+                    key: 'util',
+                    header: 'Utilisation',
+                    width: '160px',
+                    render: (row) => <Progress value={row.utilisation} label={`${row.divisionName} utilisation`} />,
+                  },
+                ]}
+              />
+            </details>
+          </>
         </Card>
       )}
 
       {data.billTrend.length > 0 && (
         <Card
-          title="Bill throughput"
-          subtitle="Last six months of running account bills"
+          title="Claims raised against payments made"
+          subtitle="The last eighteen complete months. The distance between the lines is the payment lag."
           actions={
             can('reports.view') ? (
               <Link to="/reports/bill-ageing" className="btn btn--sm">Ageing analysis</Link>
@@ -296,19 +357,115 @@ function StaffView({ data }: { data: StaffDashboard }) {
           }
           flush
         >
-          <DataTable
-            rows={data.billTrend}
-            rowKey={(row) => row.month}
-            compact
-            columns={[
-              { key: 'month', header: 'Month', render: (row) => row.month },
-              { key: 'count', header: 'Bills raised', numeric: true, render: (row) => row.billCount },
-              { key: 'amount', header: 'Value raised', numeric: true, render: (row) => rupees(row.amount) },
-              { key: 'paid', header: 'Value paid', numeric: true, render: (row) => rupees(row.paidAmount) },
-            ]}
-          />
+          <div className="card__chart">
+            <TrendChart
+              months={data.billTrend.map((row) => row.month)}
+              series={[
+                {
+                  key: 'raised',
+                  label: 'Claims raised',
+                  color: SERIES[0],
+                  values: data.billTrend.map((row) => row.amount),
+                },
+                {
+                  key: 'paid',
+                  label: 'Payments made',
+                  color: SERIES[2],
+                  values: data.billTrend.map((row) => row.paidAmount),
+                },
+              ]}
+              format={rupees}
+              caption="Running account bills raised each month against the payments actually made in that month, over the last eighteen months."
+            />
+          </div>
+          <details className="chart-figures">
+            <summary>Show the monthly figures</summary>
+            <DataTable
+              rows={data.billTrend}
+              rowKey={(row) => row.month}
+              compact
+              columns={[
+                { key: 'month', header: 'Month', render: (row) => row.month },
+                { key: 'count', header: 'Bills raised', numeric: true, render: (row) => row.billCount },
+                { key: 'amount', header: 'Value raised', numeric: true, render: (row) => rupees(row.amount) },
+                { key: 'paid', header: 'Value paid', numeric: true, render: (row) => rupees(row.paidAmount) },
+              ]}
+            />
+          </details>
         </Card>
       )}
+
+      <div className="grid grid--2">
+        <Card
+          title="How long unpaid bills have been waiting"
+          subtitle="Bills still moving through approval, by the time since they were raised"
+          actions={
+            can('reports.view') ? (
+              <Link to="/reports/bill-ageing" className="btn btn--sm">Full register</Link>
+            ) : undefined
+          }
+          flush
+        >
+          <div className="card__chart">
+            <ColumnChart
+              columns={data.billAgeing.map((bucket, index) => ({
+                key: bucket.key,
+                label: bucket.label,
+                value: bucket.count,
+                color: AGE_RAMP[index] ?? AGE_RAMP[AGE_RAMP.length - 1]!,
+                note: rupeesShort(bucket.amount),
+              }))}
+              format={(value) => String(value)}
+              caption="Count of unpaid running account bills in each ageing bucket, with the value held up in each."
+            />
+          </div>
+          <details className="chart-figures">
+            <summary>Show the figures</summary>
+            <DataTable
+              rows={data.billAgeing}
+              rowKey={(row) => row.key}
+              compact
+              columns={[
+                { key: 'bucket', header: 'Waiting', render: (row) => row.label },
+                { key: 'count', header: 'Bills', numeric: true, render: (row) => row.count },
+                { key: 'amount', header: 'Value held up', numeric: true, render: (row) => rupees(row.amount) },
+              ]}
+            />
+          </details>
+        </Card>
+
+        <Card title="Where the work stands" subtitle="Works by sanction stage, and tenders by stage of procurement">
+          <div className="stack">
+            <div>
+              <h3 className="chart-heading">Works</h3>
+              <StackedBar
+                unit="work(s)"
+                segments={data.projectMix.map((slice) => ({
+                  key: slice.status,
+                  label: slice.label,
+                  value: slice.count,
+                  color: PROJECT_STATUS_COLOUR[slice.status] ?? SERIES[5],
+                }))}
+              />
+            </div>
+            <div>
+              <h3 className="chart-heading">Tenders</h3>
+              <StackedBar
+                unit="tender(s)"
+                segments={data.tenderPipeline.map((stage) => ({
+                  key: stage.stage,
+                  label: stage.label,
+                  value: stage.count,
+                  color: TENDER_STAGE_COLOUR[stage.stage] ?? SERIES[5],
+                }))}
+              />
+              {data.tenderPipeline.every((stage) => stage.count === 0) && (
+                <EmptyState title="No tenders in the pipeline" />
+              )}
+            </div>
+          </div>
+        </Card>
+      </div>
 
       {data.recentActivity.length > 0 && (
         <Card title="Recent activity across the department">

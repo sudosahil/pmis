@@ -1288,7 +1288,13 @@ export interface StaffDashboard {
     schemeCode: string; schemeName: string; projectCount: number;
     sanctioned: number; paid: number; utilisation: number;
   }[];
+  /** A continuous run of months, oldest first, with the quiet ones filled in. */
   billTrend: { month: string; billCount: number; amount: number; paidAmount: number }[];
+  /** The four ageing buckets, always all four, oldest last. */
+  billAgeing: { key: string; label: string; count: number; amount: number }[];
+  /** Project counts by status; a status nothing sits in is left out. */
+  projectMix: { status: string; label: string; count: number }[];
+  tenderPipeline: { stage: string; label: string; count: number }[];
   divisionPerformance: {
     divisionId: number; divisionCode: string; divisionName: string;
     projectCount: number; sanctioned: number; paid: number;

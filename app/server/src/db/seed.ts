@@ -275,6 +275,34 @@ function seedMasters(): Ids {
     effective_date: '2020-04-01',
   });
 
+  // Three further divisions. The dashboard's division league table and the
+  // circle-scoped views only say anything once there is more than one division
+  // to compare, and a Superintending Engineer's circle has several under it.
+  ids.divMys = upsert('divisions', 'DIV-MYS', {
+    name: 'Mysuru Division',
+    circle_id: ids.circleCivil,
+    head_of_division: 'Er. S. Hegde',
+    contact_email: 'ee.mys@pmis.gov.in',
+    contact_phone: '0821-2334455',
+    effective_date: '2019-04-01',
+  });
+  ids.divHub = upsert('divisions', 'DIV-HUB', {
+    name: 'Hubballi Division',
+    circle_id: ids.circleCivil,
+    head_of_division: 'Er. R. Kulkarni',
+    contact_email: 'ee.hub@pmis.gov.in',
+    contact_phone: '0836-2334455',
+    effective_date: '2019-04-01',
+  });
+  ids.divBlr = upsert('divisions', 'DIV-BLR', {
+    name: 'Bengaluru Rural Division',
+    circle_id: ids.circleUrban,
+    head_of_division: 'Er. N. Gowda',
+    contact_email: 'ee.blr@pmis.gov.in',
+    contact_phone: '080-22556677',
+    effective_date: '2021-04-01',
+  });
+
   ids.sdNgr1 = upsert('sub_divisions', 'SD-NGR-01', {
     name: 'Gandhinagar West Sub Division',
     division_id: ids.divNgr,
@@ -1161,6 +1189,10 @@ function seedDemoRecords(ids: Ids, userIds: Ids, contractorIds: Ids): void {
   seedCasework(ids, userIds, contractorIds, projectIds);
   seedApprovalFlows(userIds, contractorIds);
   ageWorkflowInstances();
+
+  // Written last, so the hand-made fixtures above keep the low reference
+  // numbers and the approval engine only ever drove the files it really did.
+  seedHistory(ids, userIds, contractorIds);
 }
 
 /**
@@ -2983,6 +3015,279 @@ function seedFunds(ids: Ids, userIds: Ids, projectIds: Ids): void {
     'Letter of credit for the water supply distribution package, second quarter.',
     'DRAFT', null, userIds['ee.kumar']!,
   );
+}
+
+/* ==========================================================================
+   Historical depth
+   ========================================================================== */
+
+/**
+ * A department only has a shape once it has a past. The fixtures above are
+ * written by hand so that every screen has a record worth reading end to end;
+ * this fills in the eighteen months of routine work behind them, so that the
+ * dashboard's trend, ageing and division charts describe a working office
+ * rather than four bills.
+ *
+ * It is deterministic — no randomness, nothing off the clock but today's date —
+ * so two seedings of the same checkout produce the same department. Numbering
+ * follows the conventions the fixtures use, which is what lets `primeSequences`
+ * advance every counter past what is written here.
+ */
+function seedHistory(ids: Ids, userIds: Ids, contractorIds: Ids): void {
+  const db = getDb();
+
+  /**
+   * A small linear congruential generator. Amounts have to vary — eighteen
+   * identical bars teach a reader nothing — but they must vary the same way on
+   * every seeding, so this starts from a constant rather than from the clock.
+   */
+  let state = 20_260_901;
+  const next = () => {
+    state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
+    return state / 2_147_483_648;
+  };
+  /** A multiplier within +/- `spread` of 1, e.g. vary(0.3) gives 0.7 … 1.3. */
+  const vary = (spread: number) => 1 + (next() * 2 - 1) * spread;
+
+  const DAY = 86_400_000;
+  const todayMs = Date.now();
+  const isoDate = (daysAgo: number) => new Date(todayMs - daysAgo * DAY).toISOString().slice(0, 10);
+
+  /** The Indian financial year (April–March) a date falls in. */
+  const fyOf = (daysAgo: number) => {
+    const d = new Date(todayMs - daysAgo * DAY);
+    const start = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
+    return `${start}-${String((start + 1) % 100).padStart(2, '0')}`;
+  };
+
+  // --- The divisions that carry the history --------------------------------
+
+  interface DivisionProfile {
+    key: string;
+    code: string;
+    /** Divisions differ in size; a league table is only worth reading if they do. */
+    scale: number;
+    /** How many of this division's pending bills have gone badly overdue. */
+    stuck: number;
+    contractors: string[];
+    inCharge: string;
+  }
+
+  const divisions: DivisionProfile[] = [
+    { key: 'divNgr', code: 'DIV-NGR', scale: 1.0, stuck: 1, contractors: ['C-10001', 'C-10003'], inCharge: 'ee.kumar' },
+    { key: 'divSgr', code: 'DIV-SGR', scale: 0.8, stuck: 0, contractors: ['C-10002', 'C-10001'], inCharge: 'ee.patel' },
+    { key: 'divUrb', code: 'DIV-URB', scale: 0.9, stuck: 2, contractors: ['C-10003', 'C-10002'], inCharge: 'ee.patel' },
+    { key: 'divMys', code: 'DIV-MYS', scale: 0.6, stuck: 1, contractors: ['C-10002', 'C-10001'], inCharge: 'ee.patel' },
+    { key: 'divHub', code: 'DIV-HUB', scale: 0.7, stuck: 0, contractors: ['C-10001', 'C-10002'], inCharge: 'ee.kumar' },
+    { key: 'divBlr', code: 'DIV-BLR', scale: 0.5, stuck: 2, contractors: ['C-10003', 'C-10001'], inCharge: 'ee.patel' },
+  ];
+
+  /** Two works per division, spread across the schemes so the funding view has spread. */
+  const works: {
+    scheme: string; workType: string; category: string; label: string; status: string; progress: number;
+  }[] = [
+    { scheme: 'schemeUplan', workType: 'wtRoad', category: 'pcMajor', label: 'Resurfacing of district main roads', status: 'IN_PROGRESS', progress: 64 },
+    { scheme: 'schemePmgsy', workType: 'wtRoad', category: 'pcMedium', label: 'Rural connectivity road package', status: 'COMPLETED', progress: 100 },
+    { scheme: 'schemeAmrut', workType: 'wtWater', category: 'pcMajor', label: 'Water supply augmentation works', status: 'IN_PROGRESS', progress: 47 },
+    { scheme: 'schemeJjm', workType: 'wtDrain', category: 'pcMedium', label: 'Storm water drain rehabilitation', status: 'COMPLETED', progress: 100 },
+    { scheme: 'schemeUplan', workType: 'wtBldg', category: 'pcMedium', label: 'Departmental staff quarters', status: 'IN_PROGRESS', progress: 28 },
+    { scheme: 'schemeAmrut', workType: 'wtWater', category: 'pcMinor', label: 'Ward-level distribution network', status: 'PENDING_SANCTION', progress: 0 },
+  ];
+
+  const insertProject = db.prepare(
+    `INSERT INTO projects
+       (project_code, name, description, scheme_id, work_type_id, project_category_id,
+        zone_id, circle_id, division_id, district_id, town_id,
+        estimated_cost, sanctioned_cost, sanction_no, sanction_date, start_date,
+        target_completion_date, physical_progress_pct, status, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const insertPackage = db.prepare(
+    `INSERT INTO packages
+       (package_code, project_id, name, work_type_id, estimated_value, awarded_value,
+        contractor_id, in_charge_user_id, agreement_no, agreement_date,
+        physical_progress_pct, status, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  interface Work {
+    projectId: number; packageId: number; divisionId: number; contractorId: number;
+    divCode: string; scale: number; stuck: number;
+  }
+  const built: Work[] = [];
+
+  divisions.forEach((division, dIndex) => {
+    const divisionId = ids[division.key]!;
+    const circleId =
+      division.code === 'DIV-URB' || division.code === 'DIV-BLR' ? ids.circleUrban! : ids.circleCivil!;
+
+    for (let w = 0; w < 2; w += 1) {
+      const work = works[(dIndex * 2 + w) % works.length]!;
+      const serial = String(dIndex * 2 + w + 20).padStart(4, '0');
+      const sanctioned = Math.round(38_000_000 * division.scale * vary(0.35));
+      const sanctionedOn = 420 - dIndex * 30 - w * 45;
+      const unsanctioned = work.status === 'PENDING_SANCTION';
+
+      const projectId = Number(
+        insertProject.run(
+          `${division.code}-HIST-${serial}`,
+          `${work.label}, ${division.code.replace('DIV-', '')}`,
+          `${work.label} taken up in the ${division.code} division under the divisional annual plan.`,
+          ids[work.scheme]!, ids[work.workType]!, ids[work.category]!,
+          ids.zoneSouth!, circleId, divisionId,
+          ids.distGnr!, ids.townGnr!,
+          toPaise(Math.round(sanctioned * 1.04)), unsanctioned ? 0 : toPaise(sanctioned),
+          unsanctioned ? null : `GO/PWD/${division.code}/${serial}/2025`,
+          unsanctioned ? null : isoDate(sanctionedOn),
+          unsanctioned ? null : isoDate(sanctionedOn - 30),
+          unsanctioned ? null : isoDate(-240),
+          work.progress, work.status,
+          userIds[division.inCharge]!,
+        ).lastInsertRowid,
+      );
+
+      // A work still awaiting sanction has no agreement, so nothing bills against it.
+      if (unsanctioned) continue;
+
+      const contractorId = contractorIds[division.contractors[w % division.contractors.length]!]!;
+      const awarded = Math.round(sanctioned * 0.94 * vary(0.05));
+      const packageId = Number(
+        insertPackage.run(
+          `${division.code}-HIST-${serial}/PKG-01`, projectId,
+          `${work.label} — main works package`,
+          ids[work.workType]!, toPaise(Math.round(awarded * 1.06)), toPaise(awarded),
+          contractorId, userIds[division.inCharge]!,
+          `AGR/${division.code}/${serial}/2025`, isoDate(sanctionedOn - 45),
+          work.progress, work.status === 'COMPLETED' ? 'COMPLETED' : 'IN_PROGRESS',
+          userIds[division.inCharge]!,
+        ).lastInsertRowid,
+      );
+
+      built.push({
+        projectId, packageId, divisionId, contractorId,
+        divCode: division.code, scale: division.scale, stuck: division.stuck,
+      });
+    }
+  });
+
+  // --- Eighteen months of running account bills ----------------------------
+
+  const insertBill = db.prepare(
+    `INSERT INTO ra_bills
+       (bill_no, dbr_no, financial_year, ra_sequence, bill_type, project_id, package_id,
+        contractor_id, division_id, period_from, period_to, measurement_book_no,
+        contractor_claim_amount, previous_paid_amount, present_bill_amount, admissible_amount,
+        total_deduction, net_payable_amount, etp_establishment_bps, etp_tools_plant_bps,
+        etp_contingency_bps, etp_total_bps, etp_amount, status, tally_voucher_no,
+        payment_date, payment_reference, created_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+             datetime('now', ?))`,
+  );
+
+  const ETP = { est: toBps(2), tp: toBps(3), cont: toBps(4) };
+  const etpTotal = ETP.est + ETP.tp + ETP.cont;
+  /** The same 10% schedule the fixtures apply, taken here as a single figure. */
+  const DEDUCTION_PCT = 10;
+
+  // Serials continue past the hand-written fixtures rather than colliding with
+  // them; primeSequences then advances each counter past the highest.
+  const serialByKey = new Map<string, number>();
+  const nextSerial = (divCode: string, fy: string) => {
+    const key = `${divCode}:${fy}`;
+    const value = (serialByKey.get(key) ?? 20) + 1;
+    serialByKey.set(key, value);
+    return value;
+  };
+
+  for (const work of built) {
+    let cumulative = 0;
+    let raSequence = 0;
+    let stuckLeft = work.stuck;
+
+    /**
+     * When each claim was raised, oldest first, so the cumulative figures climb
+     * the way a running account actually does. Roughly monthly going back, then
+     * a claim raised this fortnight and sometimes one from the last few days —
+     * a live work bills more often than the archive suggests, and the ageing
+     * analysis is only worth reading if files exist at every age.
+     */
+    const raisedDaysAgo: number[] = [];
+    for (let monthsBack = 17; monthsBack >= 1; monthsBack -= 1) {
+      raisedDaysAgo.push(monthsBack * 30 + Math.round(next() * 8));
+    }
+    raisedDaysAgo.push(16 + Math.floor(next() * 13));
+    if (next() < 0.6) raisedDaysAgo.push(Math.round(next() * 12));
+
+    for (const daysAgo of raisedDaysAgo) {
+      raSequence += 1;
+      const fy = fyOf(daysAgo);
+      const serial = nextSerial(work.divCode, fy);
+      // Sized so that eighteen months of claims stay well inside the agreement
+      // value — a running account bills against a fixed contract, it does not
+      // overrun it, and utilisation above 100% would be a defect on the charts.
+      const gross = toPaise(Math.round(1_400_000 * work.scale * vary(0.45)));
+      const deduction = Math.round((gross * DEDUCTION_PCT) / 100);
+
+      /**
+       * Age decides how far a bill has got. Anything older than a couple of
+       * quarters has been paid; the recent months sit at various desks along
+       * the chain; and each division's designated stuck files are left waiting
+       * far longer than they should be, which is precisely what the ageing
+       * analysis exists to surface.
+       */
+      let status: string;
+      let paymentDate: string | null = null;
+      let paymentRef: string | null = null;
+      let voucher: string | null = null;
+
+      if (daysAgo > 150) {
+        status = 'PAID';
+      } else if (daysAgo > 60) {
+        if (stuckLeft > 0 && daysAgo < 130) {
+          status = 'IN_APPROVAL';
+          stuckLeft -= 1;
+        } else {
+          status = 'PAID';
+        }
+      } else if (daysAgo > 30) {
+        // A quarter of this band cleared quickly. Without them no payment date
+        // falls in the last two months and the payments line drops to zero at
+        // the right-hand edge, which reads as a department that has stopped
+        // paying rather than one that is still working through the file.
+        const roll = next();
+        status = roll < 0.25 ? 'PAID' : roll < 0.6 ? 'SENT_TO_TALLY' : 'IN_APPROVAL';
+      } else if (daysAgo > 15) {
+        status = 'IN_APPROVAL';
+      } else {
+        status = next() < 0.35 ? 'DRAFT' : 'IN_APPROVAL';
+      }
+
+      if (status === 'PAID') {
+        // The lag from claim to payment varies between two and six weeks.
+        paymentDate = isoDate(Math.max(0, daysAgo - (14 + Math.round(next() * 28))));
+        paymentRef = `RTGS/SBIN/${fy.slice(0, 4)}/${100_000 + serial * 7}`;
+        voucher = `TV/${work.divCode}/${fy}/${String(serial).padStart(5, '0')}`;
+      } else if (status === 'SENT_TO_TALLY') {
+        voucher = `TV/${work.divCode}/${fy}/${String(serial).padStart(5, '0')}`;
+      }
+
+      insertBill.run(
+        `${work.divCode}/RA/${fy}/${String(serial).padStart(4, '0')}`,
+        `${serial}/${fy.slice(2)}`, fy, raSequence, 'RA',
+        work.projectId, work.packageId, work.contractorId, work.divisionId,
+        isoDate(daysAgo + 30), isoDate(daysAgo),
+        `MB/${work.divCode.replace('DIV-', '')}/${fy.slice(0, 4)}/${String(serial).padStart(3, '0')}`,
+        gross, cumulative, gross, gross,
+        deduction, gross - deduction,
+        ETP.est, ETP.tp, ETP.cont, etpTotal, Math.round((gross * etpTotal) / 10_000),
+        status, voucher, paymentDate, paymentRef,
+        userIds['ac.nair']!,
+        `-${daysAgo} days`,
+      );
+
+      if (status === 'PAID') cumulative += gross;
+    }
+  }
 }
 
 // --- Entry point -----------------------------------------------------------

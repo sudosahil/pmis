@@ -35,6 +35,74 @@ export function getDashboard(user: AuthUser) {
   return staffDashboard(user);
 }
 
+/** How many complete months the dashboard's trend chart covers. */
+const TREND_MONTHS = 18;
+
+/**
+ * Fills in the months the department raised nothing, and stops at the last
+ * complete one.
+ *
+ * Two corrections, and without either the chart misreports. SQL returns only
+ * the months that have rows, so a quiet month vanishes and the line is drawn
+ * straight across it, showing steady work through a period when nothing
+ * happened. And the month in progress is only ever partly counted — on the
+ * first of the month it is nearly empty — so a reader sees a cliff at the
+ * right-hand edge and reads it as a collapse in activity rather than as a
+ * month that has barely started.
+ */
+function fillMonths(
+  rows: { month: string; billCount: number; amount: number; paidAmount: number }[],
+  months: number,
+): { month: string; billCount: number; amount: number; paidAmount: number }[] {
+  const byMonth = new Map(rows.map((row) => [row.month, row]));
+  const now = new Date();
+  const filled: typeof rows = [];
+
+  for (let back = months; back >= 1; back -= 1) {
+    const at = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - back, 1));
+    const key = `${at.getUTCFullYear()}-${String(at.getUTCMonth() + 1).padStart(2, '0')}`;
+    const row = byMonth.get(key);
+    filled.push({
+      month: key,
+      billCount: row?.billCount ?? 0,
+      amount: toRupees(row?.amount ?? 0),
+      paidAmount: toRupees(row?.paidAmount ?? 0),
+    });
+  }
+  return filled;
+}
+
+/** The ageing buckets, in order, so an empty one still holds its place. */
+const AGEING_BUCKETS: { key: string; label: string }[] = [
+  { key: '0-15', label: 'Up to 15 days' },
+  { key: '16-30', label: '16 to 30 days' },
+  { key: '31-60', label: '31 to 60 days' },
+  { key: '60+', label: 'Over 60 days' },
+];
+
+/** Project statuses in the order a work passes through them. */
+const PROJECT_STATUSES: { key: string; field: string; label: string }[] = [
+  { key: 'DRAFT', field: 'draft', label: 'Draft' },
+  { key: 'PENDING_SANCTION', field: 'pendingSanction', label: 'Awaiting sanction' },
+  { key: 'SANCTIONED', field: 'sanctioned', label: 'Sanctioned' },
+  { key: 'IN_PROGRESS', field: 'inProgress', label: 'In progress' },
+  { key: 'COMPLETED', field: 'completed', label: 'Completed' },
+];
+
+/** Tender stages in the order a tender moves through them. */
+const TENDER_STAGES: { key: string; field: string; label: string }[] = [
+  { key: 'PENDING_APPROVAL', field: 'pendingApproval', label: 'Awaiting approval' },
+  { key: 'PUBLISHED', field: 'published', label: 'Published' },
+  { key: 'UNDER_EVALUATION', field: 'underEvaluation', label: 'Under evaluation' },
+  { key: 'AWARDED', field: 'awarded', label: 'Awarded' },
+];
+
+/** Paid as a percentage of sanctioned, with nothing sanctioned reading as zero. */
+function utilisationOf(paid: number, sanctioned: number): number {
+  if (sanctioned <= 0) return 0;
+  return Math.round((paid / sanctioned) * 100);
+}
+
 function staffDashboard(user: AuthUser) {
   const scope = scopeFilter(user);
   const fy = financialYear();
@@ -94,19 +162,37 @@ function staffDashboard(user: AuthUser) {
       ...row,
       sanctioned: toRupees(row.sanctioned),
       paid: toRupees(row.paid),
-      utilisation: row.sanctioned > 0 ? Math.round((row.paid / row.sanctioned) * 100) : 0,
+      utilisation: utilisationOf(row.paid, row.sanctioned),
     })),
-    billTrend: dashboardModel.billTrend(scope).map((row) => ({
-      ...row,
-      amount: toRupees(row.amount),
-      paidAmount: toRupees(row.paidAmount),
+    billTrend: fillMonths(dashboardModel.billTrend(scope, TREND_MONTHS + 1), TREND_MONTHS),
+    billAgeing: (() => {
+      const counted = new Map(
+        dashboardModel.billAgeing(scope).map((row) => [row.bucket, row]),
+      );
+      return AGEING_BUCKETS.map((bucket) => ({
+        key: bucket.key,
+        label: bucket.label,
+        count: counted.get(bucket.key)?.count ?? 0,
+        amount: toRupees(counted.get(bucket.key)?.amount ?? 0),
+      }));
+    })(),
+    // A status nothing sits in is left out rather than drawn as an empty slice.
+    projectMix: PROJECT_STATUSES.map((status) => ({
+      status: status.key,
+      label: status.label,
+      count: projects[status.field] ?? 0,
+    })).filter((slice) => slice.count > 0),
+    tenderPipeline: TENDER_STAGES.map((stage) => ({
+      stage: stage.key,
+      label: stage.label,
+      count: tenders[stage.field] ?? 0,
     })),
     divisionPerformance: isSenior
       ? dashboardModel.divisionPerformance(scope).map((row) => ({
           ...row,
           sanctioned: toRupees(row.sanctioned),
           paid: toRupees(row.paid),
-          utilisation: row.sanctioned > 0 ? Math.round((row.paid / row.sanctioned) * 100) : 0,
+          utilisation: utilisationOf(row.paid, row.sanctioned),
         }))
       : [],
     overdueApprovals: dashboardModel.overdueApprovals(scope).map((row) => ({

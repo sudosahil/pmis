@@ -116,12 +116,15 @@ export function spendByScheme(scope: ScopeParams, limit = 8) {
   const { clause, params } = projectScope('p', scope);
   return getDb()
     .prepare(
+      // The paid figure is summed over the same scoped set of projects as the
+      // sanctioned one. Reading it from every project on the scheme instead
+      // would show a division officer the department's payments against their
+      // own division's sanctions, and report utilisation above 100%.
       `SELECT s.code AS schemeCode, s.name AS schemeName,
               COUNT(DISTINCT p.id) AS projectCount,
               COALESCE(SUM(p.sanctioned_cost), 0) AS sanctioned,
-              COALESCE((SELECT SUM(rb.net_payable_amount) FROM ra_bills rb
-                        WHERE rb.project_id IN (SELECT id FROM projects p2 WHERE p2.scheme_id = s.id)
-                          AND rb.status = 'PAID'), 0) AS paid
+              COALESCE(SUM((SELECT COALESCE(SUM(rb.net_payable_amount), 0) FROM ra_bills rb
+                             WHERE rb.project_id = p.id AND rb.status = 'PAID')), 0) AS paid
        FROM projects p JOIN schemes s ON s.id = p.scheme_id
        ${clause}
        GROUP BY s.id ORDER BY sanctioned DESC LIMIT ?`,
@@ -135,26 +138,80 @@ export function spendByScheme(scope: ScopeParams, limit = 8) {
   }[];
 }
 
-/** Monthly bill throughput for the last N months. */
-export function billTrend(scope: ScopeParams, months = 6) {
+/**
+ * Monthly bill throughput for the last N months: what was claimed in a month,
+ * and what was actually paid out in it.
+ *
+ * The two are deliberately grouped on different dates. A claim belongs to the
+ * month it was raised; a payment belongs to the month the money left, which is
+ * usually a later one. Booking both against the bill's creation date would draw
+ * two identical lines and hide the payment lag, which is the one thing a
+ * throughput chart exists to show.
+ */
+export function billTrend(scope: ScopeParams, months = 18) {
   const { clause, params } = projectScope('p', scope);
-  const extra = clause ? `${clause} AND` : 'WHERE';
+  const raisedWhere = clause ? `${clause} AND` : 'WHERE';
+  const window = `-${months} months`;
   return getDb()
     .prepare(
-      `SELECT strftime('%Y-%m', rb.created_at) AS month,
-              COUNT(*) AS billCount,
-              COALESCE(SUM(rb.net_payable_amount), 0) AS amount,
-              COALESCE(SUM(CASE WHEN rb.status = 'PAID' THEN rb.net_payable_amount ELSE 0 END), 0) AS paidAmount
-       FROM ra_bills rb JOIN projects p ON p.id = rb.project_id
-       ${extra} rb.created_at >= date('now', ?)
-       GROUP BY month ORDER BY month`,
+      `SELECT month,
+              SUM(billCount) AS billCount,
+              SUM(amount) AS amount,
+              SUM(paidAmount) AS paidAmount
+         FROM (
+           SELECT strftime('%Y-%m', rb.created_at) AS month,
+                  COUNT(*) AS billCount,
+                  COALESCE(SUM(rb.net_payable_amount), 0) AS amount,
+                  0 AS paidAmount
+             FROM ra_bills rb JOIN projects p ON p.id = rb.project_id
+             ${raisedWhere} rb.created_at >= date('now', ?)
+            GROUP BY month
+           UNION ALL
+           SELECT strftime('%Y-%m', rb.payment_date) AS month,
+                  0 AS billCount,
+                  0 AS amount,
+                  COALESCE(SUM(rb.net_payable_amount), 0) AS paidAmount
+             FROM ra_bills rb JOIN projects p ON p.id = rb.project_id
+             ${raisedWhere} rb.payment_date IS NOT NULL
+              AND rb.payment_date >= date('now', ?)
+            GROUP BY month
+         )
+        GROUP BY month ORDER BY month`,
     )
-    .all(...params, `-${months} months`) as {
+    .all(...params, window, ...params, window) as {
     month: string;
     billCount: number;
     amount: number;
     paidAmount: number;
   }[];
+}
+
+/** The statuses a running account bill sits in while it is still owed money. */
+const UNSETTLED_BILL_STATUSES = `('IN_APPROVAL', 'APPROVED', 'SENT_TO_TALLY')`;
+
+/**
+ * How long the bills that are still moving have been waiting, in the buckets
+ * the ageing register uses. Draft bills are excluded because nobody is waiting
+ * on the department for them, and paid and rejected ones are finished.
+ */
+export function billAgeing(scope: ScopeParams) {
+  const { clause, params } = projectScope('p', scope);
+  const where = clause ? `${clause} AND` : 'WHERE';
+  return getDb()
+    .prepare(
+      `SELECT CASE
+                WHEN julianday('now') - julianday(rb.created_at) <= 15 THEN '0-15'
+                WHEN julianday('now') - julianday(rb.created_at) <= 30 THEN '16-30'
+                WHEN julianday('now') - julianday(rb.created_at) <= 60 THEN '31-60'
+                ELSE '60+'
+              END AS bucket,
+              COUNT(*) AS count,
+              COALESCE(SUM(rb.net_payable_amount), 0) AS amount
+         FROM ra_bills rb JOIN projects p ON p.id = rb.project_id
+         ${where} rb.status IN ${UNSETTLED_BILL_STATUSES}
+        GROUP BY bucket`,
+    )
+    .all(...params) as { bucket: string; count: number; amount: number }[];
 }
 
 /** Division-level league table used by circle and head-office dashboards. */
