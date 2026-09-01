@@ -221,40 +221,23 @@ export function AppLayout() {
             </button>
 
             {userMenuOpen && (
-              <div
-                role="menu"
-                style={{
-                  position: 'absolute', right: 0, top: 'calc(100% + 6px)', minWidth: 230,
-                  background: 'var(--surface)', border: '1px solid var(--line)',
-                  borderRadius: 'var(--radius)', boxShadow: 'var(--shadow-lg)', zIndex: 60,
-                  overflow: 'hidden',
-                }}
-              >
-                <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--line-soft)' }}>
-                  <div style={{ fontWeight: 700, fontSize: 14 }}>{user.fullName}</div>
-                  <div style={{ fontSize: 12.5, color: 'var(--ink-600)' }}>{user.email}</div>
-                  <div style={{ fontSize: 12.5, color: 'var(--ink-600)', marginTop: 2 }}>
+              <div role="menu" className="user-menu">
+                <div className="user-menu__head">
+                  <div className="user-menu__name">{user.fullName}</div>
+                  <div className="user-menu__meta">{user.email}</div>
+                  <div className="user-menu__meta">
                     {user.roleName}{posting ? ` · ${posting}` : ''}
                   </div>
                 </div>
-                <Link
-                  to="/profile"
-                  role="menuitem"
-                  style={{ display: 'block', padding: '10px 14px', color: 'var(--ink-900)' }}
-                >
-                  Profile & password
+                <Link to="/profile" role="menuitem" className="user-menu__item">
+                  Profile &amp; password
                 </Link>
                 <button
                   type="button"
                   role="menuitem"
+                  className="user-menu__item user-menu__item--danger"
                   onClick={() => {
                     void signOut().then(() => navigate('/login'));
-                  }}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-                    padding: '10px 14px', border: 'none', borderTop: '1px solid var(--line-soft)',
-                    background: 'transparent', cursor: 'pointer', textAlign: 'left',
-                    color: 'var(--danger-fg)', fontWeight: 600,
                   }}
                 >
                   <LogOutIcon /> Sign out

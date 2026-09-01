@@ -1,4 +1,5 @@
 import type { ComponentPropsWithoutRef, ReactNode } from 'react';
+import { useModalDismiss } from './modal-dismiss';
 
 /* ==========================================================================
    Shared primitives. Each extends its native element so callers can pass
@@ -27,6 +28,19 @@ export function Button({
   disabled,
   ...props
 }: ButtonProps) {
+  /**
+   * A footer button whose handler *is* the surrounding dialog's `onClose` is
+   * that dialog's Cancel, so it is routed through the dialog's exit animation
+   * rather than unmounting it on the spot. The comparison is on the function
+   * itself, not on the label, so it cannot be fooled by wording; a button with
+   * any other handler is left exactly as it was written.
+   */
+  const dismiss = useModalDismiss();
+  const onClick =
+    dismiss && props.onClick && props.onClick === dismiss.onClose
+      ? (dismiss.requestClose as typeof props.onClick)
+      : props.onClick;
+
   const classes = [
     'btn',
     variant !== 'default' ? `btn--${variant}` : '',
@@ -38,7 +52,7 @@ export function Button({
     .join(' ');
 
   return (
-    <button className={classes} disabled={disabled || loading} {...props}>
+    <button className={classes} disabled={disabled || loading} {...props} onClick={onClick}>
       {loading ? <span className="spinner" aria-hidden="true" /> : icon}
       {children}
     </button>

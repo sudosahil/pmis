@@ -72,6 +72,21 @@
   --shadow: 0 2px 8px rgba(11, 37, 69, 0.1);
   --shadow-lg: 0 8px 28px rgba(11, 37, 69, 0.18);
 
+  /* Motion. Two curves and four durations, and every animated property in
+     this file uses one of them — a timing nobody can justify is a timing that
+     drifts. --ease-out decelerates, for things arriving; --ease-in is its
+     mirror, for things leaving, so a surface returns along the path it left
+     by. See docs/design-guidelines.md. */
+  --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-in: cubic-bezier(0.4, 0, 0.6, 1);
+  --dur-press: 90ms;   /* pointer-down feedback; must feel instant */
+  --dur-fast: 140ms;   /* hover and small state changes */
+  --dur-base: 220ms;   /* a surface entering or leaving */
+  --dur-slow: 320ms;   /* large surfaces: the modal panel */
+
+  /* How far an interactive surface depresses when pressed. */
+  --press-scale: 0.978;
+
   --header-height: 60px;
   --sidebar-width: 258px;
 
@@ -103,6 +118,20 @@ body {
 
 h1, h2, h3, h4, h5, h6, p, figure, ul, ol, dl, dd {
   margin: 0;
+}
+
+/* Tracking is a function of size, never one value for everything: letters read
+   too far apart as type grows, and too tight as it shrinks. Headings tighten,
+   body sits at zero, and the small uppercase labels open up — those are set
+   where they are used. Leading moves the opposite way to size. */
+h1, h2, h3 {
+  letter-spacing: -0.018em;
+  line-height: 1.2;
+}
+
+h4, h5, h6 {
+  letter-spacing: -0.008em;
+  line-height: 1.3;
 }
 
 ul, ol {
@@ -444,6 +473,14 @@ a:hover {
   font-size: 14px;
   border-left: 3px solid transparent;
   min-height: 40px;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-left-color var(--dur-fast) var(--ease-out);
+}
+
+.nav-link:active {
+  background: var(--brand-100);
 }
 
 .nav-link:hover {
@@ -641,6 +678,20 @@ a:hover {
   box-shadow: var(--shadow-sm);
   display: block;
   color: inherit;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-press) var(--ease-out);
+}
+
+a.stat:hover {
+  box-shadow: var(--shadow);
+  transform: translateY(-1px);
+}
+
+a.stat:active {
+  transform: scale(var(--press-scale));
+  box-shadow: var(--shadow-sm);
 }
 
 a.stat:hover {
@@ -706,7 +757,17 @@ a.stat:hover {
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    transform var(--dur-press) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+/* The press is acknowledged on pointer-down. Waiting for the click to land is
+   what makes an interface feel dead. */
+.btn:active:not(:disabled) {
+  transform: scale(var(--press-scale));
 }
 
 .btn:hover:not(:disabled) {
@@ -985,6 +1046,10 @@ a.stat:hover {
   position: sticky;
   top: 0;
   z-index: 1;
+}
+
+.table tbody tr {
+  transition: background var(--dur-fast) var(--ease-out);
 }
 
 .table tbody tr:hover {
@@ -1395,6 +1460,26 @@ a.stat:hover {
   padding: 20px;
   z-index: 100;
   overflow-y: auto;
+  animation: scrim-in var(--dur-base) var(--ease-out);
+}
+
+/* A modal is a blocking task, so the scrim dims the page behind it while the
+   panel arrives. Exit mirrors entry exactly — the panel leaves by the path it
+   came in on, which is what makes the two read as one movement. */
+.modal-backdrop.is-closing {
+  animation: scrim-out var(--dur-base) var(--ease-in) forwards;
+}
+
+@keyframes scrim-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes scrim-out { to { opacity: 0; } }
+
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes panel-out {
+  to { opacity: 0; transform: translateY(8px) scale(0.96); }
 }
 
 .modal {
@@ -1407,6 +1492,11 @@ a.stat:hover {
   display: flex;
   flex-direction: column;
   margin: auto;
+  animation: panel-in var(--dur-slow) var(--ease-out);
+}
+
+.modal-backdrop.is-closing .modal {
+  animation: panel-out var(--dur-base) var(--ease-in) forwards;
 }
 
 .modal--wide { max-width: 900px; }
@@ -1445,10 +1535,19 @@ a.stat:hover {
   place-items: center;
 }
 
+.modal__close {
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur-press) var(--ease-out);
+}
+
 .modal__close:hover {
   background: var(--surface-sunken);
   color: var(--ink-900);
 }
+
+.modal__close:active { transform: scale(0.92); }
 
 .modal__body {
   padding: 20px;
@@ -1489,7 +1588,13 @@ a.stat:hover {
   background: var(--surface);
   box-shadow: var(--shadow-lg);
   font-size: 14px;
-  animation: toast-in 0.18s ease;
+  animation: toast-in var(--dur-base) var(--ease-out);
+}
+
+/* Toasts rise from the bottom-right corner they are anchored to, and sink back
+   into it. */
+.toast.is-leaving {
+  animation: toast-out var(--dur-fast) var(--ease-in) forwards;
 }
 
 .toast--ok { border-color: var(--ok-line); border-left: 4px solid var(--ok-fg); }
@@ -1510,8 +1615,82 @@ a.stat:hover {
 }
 
 @keyframes toast-in {
-  from { opacity: 0; transform: translateY(10px); }
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
   to { opacity: 1; transform: none; }
+}
+
+@keyframes toast-out {
+  to { opacity: 0; transform: translateY(10px) scale(0.98); }
+}
+
+/* --------------------------------------------------------------------------
+   Floating menu — the three surfaces that genuinely float over content are the
+   modal scrim, the toasts and this menu. Those get a material; the header and
+   sidebar do not, because nothing scrolls underneath them.
+   -------------------------------------------------------------------------- */
+
+.user-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 230px;
+  z-index: 60;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  /* Opaque enough to hold text over the navy header it overlaps. A lighter
+     material looked better empty and made the user's own name unreadable —
+     legibility wins, and the blur still reads as a material. */
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(20px) saturate(180%);
+  /* Grows out of the avatar that opened it rather than out of its own centre,
+     so the menu and its trigger read as one object. */
+  transform-origin: top right;
+  animation: menu-in var(--dur-fast) var(--ease-out);
+  /* The menu is a child of the navy header, so it inherits white text onto a
+     white surface. Setting ink here is what makes the user's own name visible
+     at all — it was invisible before this was stated. */
+  color: var(--ink-900);
+}
+
+@keyframes menu-in {
+  from { opacity: 0; transform: scale(0.96) translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.user-menu__head {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.user-menu__name { font-weight: 700; font-size: 14px; }
+.user-menu__meta { font-size: 12.5px; color: var(--ink-600); }
+
+.user-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  color: var(--ink-900);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.user-menu__item:hover {
+  background: var(--brand-050);
+  text-decoration: none;
+}
+
+.user-menu__item--danger {
+  border-top: 1px solid var(--line-soft);
+  color: var(--danger-fg);
+  font-weight: 600;
 }
 
 /* --------------------------------------------------------------------------
@@ -1781,11 +1960,48 @@ a.stat:hover {
   to { background-position: -200% 0; }
 }
 
+/* Reduced motion asks for less movement, not less feedback. Transforms and
+   travel go; opacity and colour stay, so a press is still acknowledged and a
+   surface still reads as arriving. Removing every transition would take the
+   responsiveness away from the people who asked only to avoid the motion. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    transition-property: opacity, background-color, background, border-color, color, box-shadow !important;
+    transition-duration: var(--dur-fast) !important;
+  }
+
+  .btn:active:not(:disabled),
+  a.stat:hover,
+  a.stat:active,
+  .modal__close:active {
+    transform: none;
+  }
+
+  a.stat:active { background: var(--surface-sunken); }
+}
+
+/* A translucent surface becomes an opaque one rather than disappearing. */
+@media (prefers-reduced-transparency: reduce) {
+  .user-menu {
+    background: var(--surface);
+    backdrop-filter: none;
+  }
+}
+
+/* More contrast means defined edges, not heavier colour. */
+@media (prefers-contrast: more) {
+  .card,
+  .stat,
+  .user-menu,
+  .modal {
+    border-color: var(--ink-600);
+  }
+
+  .table th,
+  .table td {
+    border-color: var(--line-strong);
   }
 }
 
@@ -2110,7 +2326,7 @@ a.stat:hover {
   a { color: inherit; text-decoration: none; }
   /* Charts print: they are SVG, and every mark is labelled. The tooltip is a
      hover artefact and the disclosure is opened so the figures come with it. */
-  .chart__tooltip { display: none !important; }
+  .chart__tooltip, .user-menu { display: none !important; }
   .chart, .barrows, .stackbar { break-inside: avoid; page-break-inside: avoid; }
   .chart-figures > summary { display: none; }
   .chart-figures > *:not(summary) { display: block !important; }

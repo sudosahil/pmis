@@ -1,6 +1,8 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Button, CloseIcon } from './ui';
+import { exitDuration } from '../lib/motion';
+import { ModalDismissContext } from './modal-dismiss';
 
 interface ModalProps {
   open: boolean;
@@ -14,12 +16,35 @@ interface ModalProps {
 
 export function Modal({ open, title, subtitle, size = 'default', onClose, footer, children }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const [closing, setClosing] = useState(false);
+  const timer = useRef<number | undefined>(undefined);
+
+  /**
+   * Plays the exit, then tells the caller.
+   *
+   * Callers unmount the dialog in their `onClose`, so calling it straight away
+   * would tear the panel out of the DOM before it could animate. Holding the
+   * call back for the length of the exit is what lets a dialog leave by the
+   * path it arrived on. Every route out — Escape, the backdrop, the close
+   * button and the footer's Cancel — goes through here, so they all behave the
+   * same way.
+   */
+  const requestClose = useCallback(() => {
+    if (closing) return;
+    setClosing(true);
+    timer.current = window.setTimeout(() => {
+      setClosing(false);
+      onClose();
+    }, exitDuration());
+  }, [closing, onClose]);
+
+  useEffect(() => () => window.clearTimeout(timer.current), []);
 
   // Escape closes, and the body underneath must not scroll while open.
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') requestClose();
     };
     document.addEventListener('keydown', onKeyDown);
     const previousOverflow = document.body.style.overflow;
@@ -29,15 +54,18 @@ export function Modal({ open, title, subtitle, size = 'default', onClose, footer
       document.removeEventListener('keydown', onKeyDown);
       document.body.style.overflow = previousOverflow;
     };
-  }, [open, onClose]);
+  }, [open, requestClose]);
 
   if (!open) return null;
 
   return createPortal(
+    <ModalDismissContext.Provider value={{ onClose, requestClose }}>
     <div
-      className="modal-backdrop"
+      className={`modal-backdrop${closing ? ' is-closing' : ''}`}
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        // A dialog already on its way out must not take another dismissal, or
+        // the second click lands on the page behind the fading scrim.
+        if (!closing && event.target === event.currentTarget) requestClose();
       }}
     >
       <div
@@ -53,14 +81,15 @@ export function Modal({ open, title, subtitle, size = 'default', onClose, footer
             <h2 className="modal__title">{title}</h2>
             {subtitle && <p className="modal__subtitle">{subtitle}</p>}
           </div>
-          <button type="button" className="modal__close" onClick={onClose} aria-label="Close">
+          <button type="button" className="modal__close" onClick={requestClose} aria-label="Close">
             <CloseIcon />
           </button>
         </header>
         <div className="modal__body">{children}</div>
         {footer && <footer className="modal__footer">{footer}</footer>}
       </div>
-    </div>,
+    </div>
+    </ModalDismissContext.Provider>,
     document.body,
   );
 }

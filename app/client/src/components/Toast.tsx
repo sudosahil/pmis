@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import { DUR_FAST_MS, exitDuration } from '../lib/motion';
 import { createPortal } from 'react-dom';
 import { CheckIcon, CloseIcon, InfoIcon, WarnIcon } from './ui';
 
@@ -22,8 +23,19 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
+  /**
+   * A toast is marked as leaving first and removed once it has animated out,
+   * so it sinks back towards the corner it rose from instead of blinking out
+   * of existence.
+   */
+  const [leaving, setLeaving] = useState<number[]>([]);
+
   const dismiss = useCallback((id: number) => {
-    setToasts((current) => current.filter((toast) => toast.id !== id));
+    setLeaving((current) => (current.includes(id) ? current : [...current, id]));
+    window.setTimeout(() => {
+      setToasts((current) => current.filter((toast) => toast.id !== id));
+      setLeaving((current) => current.filter((leavingId) => leavingId !== id));
+    }, exitDuration(DUR_FAST_MS));
   }, []);
 
   const push = useCallback(
@@ -51,7 +63,10 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       {createPortal(
         <div className="toast-stack" role="region" aria-label="Notifications" aria-live="polite">
           {toasts.map((toast) => (
-            <div key={toast.id} className={`toast toast--${toast.tone}`}>
+            <div
+              key={toast.id}
+              className={`toast toast--${toast.tone}${leaving.includes(toast.id) ? ' is-leaving' : ''}`}
+            >
               <span style={{ flex: 'none', marginTop: 1 }}>
                 {toast.tone === 'ok' ? <CheckIcon /> : toast.tone === 'danger' ? <WarnIcon /> : <InfoIcon />}
               </span>
